@@ -1,0 +1,90 @@
+-- OEE, MTBF and MTTR computed entirely in Exasol SQL
+OPEN SCHEMA OEE;
+
+-- OEE per machine per shift: Availability x Performance x Quality
+CREATE OR REPLACE VIEW V_OEE_SHIFT AS
+SELECT
+    p.MACHINE_ID,
+    m.PLANT_ID,
+    m.LINE_ID,
+    m.MACHINE_TYPE,
+    p.SHIFT_START,
+    CAST(p.SHIFT_START AS DATE)                                   AS SHIFT_DATE,
+    p.PLANNED_MINUTES,
+    p.DOWNTIME_MINUTES,
+    p.PLANNED_MINUTES - p.DOWNTIME_MINUTES                        AS RUN_MINUTES,
+    p.IDEAL_CYCLE_S,
+    p.TOTAL_COUNT,
+    p.GOOD_COUNT,
+    (p.PLANNED_MINUTES - p.DOWNTIME_MINUTES) / NULLIF(p.PLANNED_MINUTES, 0)                      AS AVAILABILITY,
+    (p.IDEAL_CYCLE_S * p.TOTAL_COUNT) / NULLIF((p.PLANNED_MINUTES - p.DOWNTIME_MINUTES) * 60, 0) AS PERFORMANCE,
+    p.GOOD_COUNT / NULLIF(p.TOTAL_COUNT, 0)                                                      AS QUALITY
+FROM SHIFT_PRODUCTION p
+JOIN MACHINES m ON m.MACHINE_ID = p.MACHINE_ID;
+
+-- Daily OEE per machine. Ratios are rebuilt from summed components
+-- (time- and count-weighted), never averaged.
+CREATE OR REPLACE VIEW V_OEE_DAILY AS
+SELECT
+    MACHINE_ID, PLANT_ID, LINE_ID, MACHINE_TYPE, SHIFT_DATE,
+    SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0)                     AS AVAILABILITY,
+    SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0)    AS PERFORMANCE,
+    SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0)                          AS QUALITY,
+    (SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0))
+      * (SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0))
+      * (SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0))                    AS OEE
+FROM V_OEE_SHIFT
+GROUP BY MACHINE_ID, PLANT_ID, LINE_ID, MACHINE_TYPE, SHIFT_DATE;
+
+-- Plant-level OEE over the whole period, same weighting
+CREATE OR REPLACE VIEW V_OEE_PLANT AS
+SELECT
+    PLANT_ID,
+    SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0)                     AS AVAILABILITY,
+    SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0)    AS PERFORMANCE,
+    SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0)                          AS QUALITY,
+    (SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0))
+      * (SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0))
+      * (SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0))                    AS OEE
+FROM V_OEE_SHIFT
+GROUP BY PLANT_ID;
+
+-- Reliability per machine. MTBF = operating hours / unplanned failures.
+-- MTTR = mean repair duration of unplanned stops.
+CREATE OR REPLACE VIEW V_RELIABILITY AS
+WITH op AS (
+    SELECT MACHINE_ID, SUM(PLANNED_MINUTES - DOWNTIME_MINUTES) / 60.0 AS OPERATING_HOURS
+    FROM SHIFT_PRODUCTION
+    GROUP BY MACHINE_ID
+),
+fail AS (
+    SELECT MACHINE_ID,
+           COUNT(*)                                        AS FAILURES,
+           AVG(SECONDS_BETWEEN(END_TS, START_TS) / 3600.0) AS MTTR_HOURS
+    FROM DOWNTIME
+    WHERE STOP_TYPE = 'UNPLANNED'
+    GROUP BY MACHINE_ID
+)
+SELECT
+    m.MACHINE_ID, m.PLANT_ID, m.LINE_ID, m.MACHINE_TYPE,
+    op.OPERATING_HOURS,
+    COALESCE(fail.FAILURES, 0)                               AS FAILURES,
+    op.OPERATING_HOURS / NULLIF(fail.FAILURES, 0)            AS MTBF_HOURS,
+    fail.MTTR_HOURS,
+    (op.OPERATING_HOURS / NULLIF(fail.FAILURES, 0))
+      / NULLIF(op.OPERATING_HOURS / NULLIF(fail.FAILURES, 0) + fail.MTTR_HOURS, 0) AS INHERENT_AVAILABILITY
+FROM MACHINES m
+LEFT JOIN op   ON op.MACHINE_ID   = m.MACHINE_ID
+LEFT JOIN fail ON fail.MACHINE_ID = m.MACHINE_ID;
+
+-- Downtime Pareto: which failure modes cost the most hours, per plant
+CREATE OR REPLACE VIEW V_DOWNTIME_PARETO AS
+SELECT
+    m.PLANT_ID,
+    d.FAILURE_MODE,
+    COUNT(*)                                             AS STOPS,
+    SUM(SECONDS_BETWEEN(d.END_TS, d.START_TS) / 3600.0)  AS DOWN_HOURS
+FROM DOWNTIME d
+JOIN MACHINES m ON m.MACHINE_ID = d.MACHINE_ID
+WHERE d.STOP_TYPE = 'UNPLANNED'
+GROUP BY m.PLANT_ID, d.FAILURE_MODE;
