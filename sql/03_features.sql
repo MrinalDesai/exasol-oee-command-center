@@ -37,15 +37,22 @@ SELECT
 FROM TELEMETRY t
 JOIN MACHINES m ON m.MACHINE_ID = t.MACHINE_ID;
 
--- Label: an unplanned stop starts within the next 24 hours
+-- Label: an unplanned stop starts within the next 24 hours.
+-- Exasol does not support a correlated EXISTS in the select list, so the
+-- positive readings are found with a range join and left-joined back.
 CREATE OR REPLACE VIEW V_TRAINING AS
+WITH positives AS (
+    SELECT DISTINCT t.MACHINE_ID, t.READING_TS
+    FROM TELEMETRY t
+    JOIN DOWNTIME d
+      ON  d.MACHINE_ID = t.MACHINE_ID
+      AND d.STOP_TYPE  = 'UNPLANNED'
+      AND d.START_TS   >  t.READING_TS
+      AND d.START_TS   <= ADD_HOURS(t.READING_TS, 24)
+)
 SELECT
     f.*,
-    CASE WHEN EXISTS (
-        SELECT 1 FROM DOWNTIME d
-        WHERE d.MACHINE_ID = f.MACHINE_ID
-          AND d.STOP_TYPE  = 'UNPLANNED'
-          AND d.START_TS   >  f.READING_TS
-          AND d.START_TS   <= ADD_HOURS(f.READING_TS, 24)
-    ) THEN 1 ELSE 0 END AS LABEL_FAIL_24H
-FROM V_FEATURES f;
+    CASE WHEN p.MACHINE_ID IS NULL THEN 0 ELSE 1 END AS LABEL_FAIL_24H
+FROM V_FEATURES f
+LEFT JOIN positives p
+  ON p.MACHINE_ID = f.MACHINE_ID AND p.READING_TS = f.READING_TS;

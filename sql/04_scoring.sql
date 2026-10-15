@@ -15,8 +15,8 @@ FROM V_FEATURES;
 CREATE OR REPLACE VIEW V_RISK_LATEST AS
 SELECT r.*, rel.MTBF_HOURS, rel.MTTR_HOURS, rel.FAILURES
 FROM RISK_SCORES r
-JOIN (SELECT MACHINE_ID, MAX(READING_TS) AS TS FROM RISK_SCORES GROUP BY MACHINE_ID) last
-  ON last.MACHINE_ID = r.MACHINE_ID AND last.TS = r.READING_TS
+JOIN (SELECT MACHINE_ID, MAX(READING_TS) AS TS FROM RISK_SCORES GROUP BY MACHINE_ID) lt
+  ON lt.MACHINE_ID = r.MACHINE_ID AND lt.TS = r.READING_TS
 JOIN V_RELIABILITY rel ON rel.MACHINE_ID = r.MACHINE_ID;
 
 -- Historical mix of failure modes (and the part each consumes) per machine type
@@ -33,7 +33,7 @@ GROUP BY m.MACHINE_TYPE, d.PART_REPLACED;
 -- Spare-parts exposure: expected part demand from current risk vs stock on hand, per plant.
 -- Answers "are the parts we are about to need in the right place?"
 CREATE OR REPLACE VIEW V_PARTS_EXPOSURE AS
-WITH demand AS (
+WITH part_demand AS (
     SELECT r.PLANT_ID, mm.PART_NO, SUM(r.RISK_24H * mm.SHARE) AS EXPECTED_DEMAND_24H
     FROM V_RISK_LATEST r
     JOIN V_MODE_MIX mm ON mm.MACHINE_TYPE = r.MACHINE_TYPE
@@ -48,4 +48,4 @@ SELECT
         ELSE 'OK'
     END                                                       AS STATUS
 FROM SPARE_PARTS s
-LEFT JOIN demand d ON d.PLANT_ID = s.PLANT_ID AND d.PART_NO = s.PART_NO;
+LEFT JOIN part_demand d ON d.PLANT_ID = s.PLANT_ID AND d.PART_NO = s.PART_NO;
