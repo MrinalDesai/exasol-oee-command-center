@@ -39,6 +39,8 @@ number traceable to SQL.
 | Model inference as a **PYTHON3 SCALAR UDF** on the stock script container | `oee/compile_udf.py` → `OEE.FAILURE_RISK` |
 | Decision views joining risk × historical failure-mode mix × stock on hand | `sql/04_scoring.sql` (`V_PARTS_EXPOSURE`) |
 | Model registry table | `OEE.MODEL_REGISTRY` |
+| Live what-if scoring: the console calls `OEE.FAILURE_RISK` with edited inputs on every slider move | `oee/app.py` (`/api/whatif`) |
+| Every console panel shows the exact SQL it ran on Exasol and how long it took | `oee/static/app.js` |
 
 ### Why the model is compiled into the UDF
 
@@ -92,6 +94,12 @@ cp .env.example .env                           # set EXA_DSN from `exasol info`
 python -m oee.cli all
 ```
 
+Then open the console:
+
+```bash
+python -m oee.cli serve        # http://127.0.0.1:8000
+```
+
 `all` runs these steps, which can also be run one at a time:
 
 | Command | What it does |
@@ -101,32 +109,39 @@ python -m oee.cli all
 | `python -m oee.cli train` | Pulls `OEE.V_TRAINING` from Exasol, trains XGBoost, writes `models/` |
 | `python -m oee.cli deploy` | Compiles the model into `OEE.FAILURE_RISK`, scores every reading, builds decision views |
 | `python -m oee.cli status` | Prints plant OEE, highest-risk machines and spare parts at risk |
+| `python -m oee.cli serve` | Starts the web console |
 
-Cloud deployment: replace `exasol install local` with `exasol install aws` or
-`exasol install azure` (see the [Exasol Personal README](https://github.com/exasol/exasol-personal)).
-Cloud deployments include the python3 container already.
+## The console
 
-### Example queries
+A dark control-room console served by FastAPI, reading Exasol through `pyexasol`.
 
-```sql
--- Where is OEE lost, by plant?
-SELECT * FROM OEE.V_OEE_PLANT ORDER BY OEE;
+- **Top bar**: database status, the timestamp of the latest data, and how many
+  readings the UDF has scored in Exasol.
+- **Sensor feed**: hourly history for the selected machine (vibration, tool
+  wear, temperature gap, torque, risk). Readings the model scored at 50% or
+  more are drawn red and boxed, stops are shaded, and the dashed line is the
+  normal for that machine type. The strip underneath shows all 60 days; click
+  it to move the 7-day window.
+- **Plant floor**: every machine on every line, coloured by its current
+  24-hour risk (healthy under 10%, watch 10–50%, critical 50%+).
+- **Diagnosis**: the model's risk, the likely failure mode (the machine type's
+  failure history re-weighted by which signals are abnormal now), the signals
+  furthest from normal, a written finding with a recommended action, similar
+  past repairs from technician notes, and stock of the needed parts at that
+  plant. **Raise work order** writes a row to `OEE.WORK_ORDERS` in Exasol.
+- **OEE line impact**: each line's A × P × Q and loss split, and what tomorrow's
+  OEE looks like if the at-risk machines stop unplanned.
+- **What-if lab**: change tool wear, vibration, temperature gap or torque on
+  the latest reading (or use a preset like "Replace tool now") and the live
+  UDF re-scores it.
+- **Repair history library** and **fault pipeline** (detect, diagnose, parts,
+  work order), plus an **active alerts** ticker.
+- Every panel shows **⛁ show SQL**: the exact queries it ran on Exasol and
+  their run time.
 
--- Which machines need attention in the next 24 hours?
-SELECT MACHINE_ID, RISK_24H, MTBF_HOURS, MTTR_HOURS
-FROM OEE.V_RISK_LATEST ORDER BY RISK_24H DESC LIMIT 10;
-
--- Score any reading ad hoc, in-database
-SELECT MACHINE_ID, READING_TS,
-       OEE.FAILURE_RISK(AIR_TEMP_K, PROCESS_TEMP_K, TEMP_DIFF_K, RPM, TORQUE_NM, TORQUE_RATIO,
-                        TOOL_WEAR_MIN, WEAR_X_LOAD, VIBRATION_MM_S, POWER_KW, VIB_AVG_6H,
-                        VIB_DELTA_6H, TEMP_DIFF_AVG_6H, POWER_AVG_6H,
-                        IS_MILL, IS_LATHE, IS_PRESS, IS_PACKER) AS RISK
-FROM OEE.V_FEATURES WHERE MACHINE_ID = 'PNQ-MILL-01' ORDER BY READING_TS DESC LIMIT 24;
-
--- Are the parts we are about to need at the right plant?
-SELECT * FROM OEE.V_PARTS_EXPOSURE WHERE STATUS <> 'OK';
-```
+The demo dataset has two planted problems for the console to surface: Chennai
+line 2 runs slow (a performance loss), and press CHN-PRESS-03's scrap rate
+climbs over the period (a quality loss).
 
 ## Data
 
@@ -144,9 +159,15 @@ Time-based split (last 20% of the period held out). On the default seed:
 
 | Metric | Value |
 |---|---|
-| Test ROC AUC | 0.80 |
-| Test average precision | 0.46 |
-| Precision in top 5% of risk | 0.64 (base rate 0.086, ~7× lift) |
+| Test ROC AUC | 0.81 |
+| Test average precision | 0.49 |
+| Precision in top 5% of risk | 0.67 (base rate 0.086, ~8× lift) |
+| Brier score | 0.058 |
+| Mean predicted risk vs actual failure rate | 0.081 vs 0.086 |
+
+The model is trained without class re-weighting so its scores stay
+calibrated: the console shows risk as a probability, and readings scored
+above 50% are followed by an unplanned stop about 69% of the time.
 
 These figures are on synthetic data and show the pipeline works end to end;
 they are not a claim about real plant performance.
@@ -164,9 +185,12 @@ oee/
   sqlrun.py        SQL file runner (handles UDF '/' terminators)
   db.py            connection settings
   cli.py           pipeline commands
+  app.py           FastAPI console backend
+  assess.py        per-machine verdicts: status, likely mode, parts, pipeline stage
+  static/          console front end (HTML, CSS, JS; charts are hand-drawn SVG)
 sql/
   01_schema.sql  02_oee_views.sql  03_features.sql  04_scoring.sql
-tests/             pytest suite (data, features, SQL contract, UDF parity)
+tests/             pytest suite (data, features, SQL contract, UDF parity, console API)
 ```
 
 ## Tests
@@ -177,7 +201,11 @@ pytest -q
 
 The suite runs offline (no database needed): generator determinism and
 integrity, OEE component bounds, label correctness, SQL ↔ Python feature
-contract, the SQL statement splitter, and UDF ↔ XGBoost parity.
+contract, the SQL statement splitter, UDF ↔ XGBoost parity, and the console
+API. The API tests run the project's own SQL files on DuckDB as a stand-in
+(`tests/fakedb.py`), which also checks the view logic: for example, that the
+three losses and productive time add up exactly to planned time. The
+application itself always runs on Exasol.
 
 ## Licence
 

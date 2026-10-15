@@ -29,7 +29,7 @@ def _load_env_file():
             os.environ.setdefault(key.strip(), value.strip())
 
 
-def connect(schema: str | None = None) -> pyexasol.ExaConnection:
+def connect(schema: str | None = None, **extra) -> pyexasol.ExaConnection:
     _load_env_file()
     verify = os.environ.get("EXA_TLS_VERIFY", "0") == "1"
     kwargs = dict(
@@ -43,4 +43,5 @@ def connect(schema: str | None = None) -> pyexasol.ExaConnection:
         kwargs["websocket_sslopt"] = {"cert_reqs": ssl.CERT_NONE}
     if schema:
         kwargs["schema"] = schema
+    kwargs.update(extra)
     return pyexasol.connect(**kwargs)

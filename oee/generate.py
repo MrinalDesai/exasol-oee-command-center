@@ -249,14 +249,25 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
     )
 
 
+# Planted operational problems, so the OEE breakdown has something to find.
+# Line-level speed losses (performance) and a machine whose scrap rate climbs
+# over the period (quality, e.g. a wearing die on a press).
+SLOW_LINES = {"CHN-L2": 0.78}            # mean speed efficiency (fleet default 0.90)
+QUALITY_DRIFT = {"CHN-PRESS-03": (0.025, 0.11)}  # scrap rate from start -> end of period
+NIGHT_SHIFT_PENALTY = 0.03               # small performance dip on the 00:00-08:00 shift
+
+
 def _shift_production(rng, machines, hours, downtime: pd.DataFrame) -> pd.DataFrame:
     """Three 8h shifts/day. Run time = planned time minus downtime overlapping the shift."""
     rows = []
     shift_starts = pd.date_range(hours[0], hours[-1], freq="8h")
+    n_shifts = len(shift_starts)
     dt_by_m = {k: g for k, g in downtime.groupby("machine_id")} if len(downtime) else {}
     for m in machines:
         stops = dt_by_m.get(m.machine_id)
-        for s in shift_starts:
+        speed_mean = SLOW_LINES.get(m.line_id, 0.90)
+        drift = QUALITY_DRIFT.get(m.machine_id)
+        for k, s in enumerate(shift_starts):
             e = s + pd.Timedelta(hours=8)
             planned_min = 8 * 60 - 30  # 30 min break
             lost = 0.0
@@ -265,9 +276,14 @@ def _shift_production(rng, machines, hours, downtime: pd.DataFrame) -> pd.DataFr
                 for _, r in ov.iterrows():
                     lost += (min(r.end_ts, e) - max(r.start_ts, s)).total_seconds() / 60.0
             run_min = max(planned_min - lost, 0.0)
-            speed_eff = float(np.clip(rng.normal(0.90, 0.05), 0.6, 1.0))
+            mean = speed_mean - (NIGHT_SHIFT_PENALTY if s.hour == 0 else 0.0)
+            speed_eff = float(np.clip(rng.normal(mean, 0.05), 0.5, 1.0))
             total = int(run_min * 60.0 / m.ideal_cycle_s * speed_eff)
-            scrap_rate = float(np.clip(rng.normal(0.025, 0.012), 0.0, 0.12))
+            if drift:
+                scrap_mean = drift[0] + (drift[1] - drift[0]) * k / max(n_shifts - 1, 1)
+            else:
+                scrap_mean = 0.025
+            scrap_rate = float(np.clip(rng.normal(scrap_mean, 0.012), 0.0, 0.2))
             good = int(total * (1 - scrap_rate))
             rows.append(
                 dict(

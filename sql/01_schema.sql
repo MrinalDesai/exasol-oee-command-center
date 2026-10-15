@@ -71,3 +71,15 @@ CREATE TABLE IF NOT EXISTS MODEL_REGISTRY (
     TEST_PRECISION_AT_K DOUBLE,
     FEATURES        VARCHAR(2000)
 );
+
+-- Work orders raised from the console (kept across pipeline re-runs)
+CREATE TABLE IF NOT EXISTS WORK_ORDERS (
+    WO_ID           DECIMAL(10,0) NOT NULL,
+    MACHINE_ID      VARCHAR(32)   NOT NULL,
+    PLANT_ID        VARCHAR(8)    NOT NULL,
+    FAILURE_MODE    VARCHAR(32),
+    PART_NO         VARCHAR(32),
+    RISK_AT_OPEN    DOUBLE,
+    OPENED_AT       TIMESTAMP,
+    STATUS          VARCHAR(16)   NOT NULL   -- OPEN | CLOSED
+);

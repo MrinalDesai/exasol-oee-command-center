@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 
 from oee.features import FEATURES, LABEL, add_labels, build_features
 
@@ -57,7 +57,9 @@ def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42):
     X_te = test_df[FEATURES].astype(float)
     y_te = test_df[LABEL].astype(int)
 
-    pos = max(int(y_tr.sum()), 1)
+    # No class re-weighting: it would inflate every probability (a "47%" that
+    # fails 7% of the time). Unweighted training keeps the risk scores
+    # calibrated, which the console relies on, and ranks as well or better.
     model = xgb.XGBClassifier(
         n_estimators=n_estimators,
         max_depth=max_depth,
@@ -65,7 +67,6 @@ def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42):
         subsample=0.9,
         colsample_bytree=0.9,
         min_child_weight=5,
-        scale_pos_weight=(len(y_tr) - pos) / pos,
         eval_metric="aucpr",
         random_state=seed,
         n_jobs=4,
@@ -80,6 +81,8 @@ def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42):
         "test_auc": float(roc_auc_score(y_te, p)),
         "test_average_precision": float(average_precision_score(y_te, p)),
         "test_precision_at_top5pct": precision_at_k(y_te, p, 0.05),
+        "test_brier": float(brier_score_loss(y_te, p)),
+        "test_mean_predicted": float(p.mean()),
         "n_trees": n_estimators,
         "max_depth": max_depth,
         "features": FEATURES,

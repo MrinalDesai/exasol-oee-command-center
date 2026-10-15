@@ -22,17 +22,18 @@ SELECT
 FROM SHIFT_PRODUCTION p
 JOIN MACHINES m ON m.MACHINE_ID = p.MACHINE_ID;
 
--- Daily OEE per machine. Ratios are rebuilt from summed components
--- (time- and count-weighted), never averaged.
+-- Daily OEE per machine. Ratios are rebuilt from summed components, never
+-- averaged. Quality is weighted by ideal cycle time so A x P x Q = OEE exactly
+-- when machines with different cycle times are combined.
 CREATE OR REPLACE VIEW V_OEE_DAILY AS
 SELECT
     MACHINE_ID, PLANT_ID, LINE_ID, MACHINE_TYPE, SHIFT_DATE,
     SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0)                     AS AVAILABILITY,
     SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0)    AS PERFORMANCE,
-    SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0)                          AS QUALITY,
+    SUM(IDEAL_CYCLE_S * GOOD_COUNT) / NULLIF(SUM(IDEAL_CYCLE_S * TOTAL_COUNT), 0)                          AS QUALITY,
     (SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0))
       * (SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0))
-      * (SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0))                    AS OEE
+      * (SUM(IDEAL_CYCLE_S * GOOD_COUNT) / NULLIF(SUM(IDEAL_CYCLE_S * TOTAL_COUNT), 0))                    AS OEE
 FROM V_OEE_SHIFT
 GROUP BY MACHINE_ID, PLANT_ID, LINE_ID, MACHINE_TYPE, SHIFT_DATE;
 
@@ -42,10 +43,10 @@ SELECT
     PLANT_ID,
     SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0)                     AS AVAILABILITY,
     SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0)    AS PERFORMANCE,
-    SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0)                          AS QUALITY,
+    SUM(IDEAL_CYCLE_S * GOOD_COUNT) / NULLIF(SUM(IDEAL_CYCLE_S * TOTAL_COUNT), 0)                          AS QUALITY,
     (SUM(RUN_MINUTES) / NULLIF(SUM(PLANNED_MINUTES), 0))
       * (SUM(IDEAL_CYCLE_S * TOTAL_COUNT) / NULLIF(SUM(RUN_MINUTES) * 60, 0))
-      * (SUM(GOOD_COUNT) / NULLIF(SUM(TOTAL_COUNT), 0))                    AS OEE
+      * (SUM(IDEAL_CYCLE_S * GOOD_COUNT) / NULLIF(SUM(IDEAL_CYCLE_S * TOTAL_COUNT), 0))                    AS OEE
 FROM V_OEE_SHIFT
 GROUP BY PLANT_ID;
 

@@ -88,3 +88,9 @@ def test_udf_parameters_follow_feature_order(trained):
     params = [line.strip().split()[0] for line in header.splitlines()[1:]]
     assert params == FEATURES
     assert LABEL not in params
+
+
+def test_risk_scores_are_calibrated(trained):
+    """The console shows risk as a probability, so the average score must track the real failure rate."""
+    _, metrics, _ = trained
+    assert abs(metrics["test_mean_predicted"] - metrics["test_positive_rate"]) < 0.5 * metrics["test_positive_rate"]

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OEE Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar" id="top">
+  <div class="logo"><div class="mark" aria-hidden="true"></div><div>OEE COMMAND CENTER<small>PREDICTIVE MAINTENANCE</small></div></div>
+  <div class="kv"><div class="k">System status</div><div class="v" id="sys">CONNECTING</div></div>
+  <div class="kv"><div class="k">Data as of</div><div class="v mono" id="asof">—</div></div>
+  <div class="kv"><div class="k">Scored in Exasol</div><div class="v mono" id="scored">—</div></div>
+  <div class="kv hide-sm"><div class="k">Uptime</div><div class="v mono" id="uptime">—</div></div>
+  <div class="right"><a class="bell" href="#alertsect">Alerts<span class="n" id="acount">0</span></a></div>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <div class="eyebrow">Dashboard</div>
+    <nav class="nav" aria-label="Sections">
+      <a class="cur" href="#top"><span class="ic" aria-hidden="true">〜</span>Live Monitor</a>
+      <a href="#floorsect"><span class="ic" aria-hidden="true">⚙</span>Plant Floor</a>
+      <a href="#diagsect"><span class="ic" aria-hidden="true">◎</span>Diagnosis</a>
+      <a href="#oeesect"><span class="ic" aria-hidden="true">▤</span>OEE Impact</a>
+      <a href="#labsect"><span class="ic" aria-hidden="true">⚗</span>What-if Lab</a>
+      <a href="#histsect"><span class="ic" aria-hidden="true">☰</span>Repair History</a>
+      <a href="#pipesect"><span class="ic" aria-hidden="true">➔</span>Fault Pipeline</a>
+      <a href="#alertsect"><span class="ic" aria-hidden="true">!</span>Alerts</a>
+    </nav>
+    <div class="details">
+      <div class="eyebrow flush">Machine details</div>
+      <div class="row"><span class="k">Asset ID</span><span class="v link" id="d_id">—</span></div>
+      <div class="row"><span class="k">Location</span><span class="v" id="d_loc">—</span></div>
+      <div class="row"><span class="k">Type</span><span class="v" id="d_type">—</span></div>
+      <div class="row"><span class="k">Parameter</span><span class="v" id="d_param">—</span></div>
+      <div class="row"><span class="k">Cadence</span><span class="v mono">1 h</span></div>
+      <div class="row"><span class="k">24 h risk</span><span class="v mono" id="d_risk">—</span></div>
+      <div class="row"><span class="k">Status</span><span class="v" id="d_status">—</span></div>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="feedhead"><h2>SENSOR FEED</h2><span class="pill">HOURLY · EXASOL</span><span class="feedsub" id="feedsub"></span></div>
+    <div class="tabsrow" id="sensortabs" role="tablist" aria-label="Signal"></div>
+    <div class="legend" id="legend"></div>
+    <div class="chartcard">
+      <div class="wavebox" id="wavebox">
+        <div class="banner" id="banner" hidden></div>
+        <canvas id="wave" role="img" aria-label="Sensor history for the selected machine"></canvas>
+      </div>
+      <div class="scrub"><canvas id="scrub" role="img" aria-label="Full history; click to move the 7-day window"></canvas></div>
+    </div>
+    <div class="cards" id="cards"></div>
+    <div class="sqlnote" data-sql="feed"></div>
+
+    <div class="sect" id="floorsect">Plant Floor</div>
+    <div id="floor"></div>
+    <div class="sqlnote" data-sql="fleet"></div>
+
+    <div class="sect" id="diagsect">Diagnosis</div>
+    <div id="diag"><span class="muted">Loading…</span></div>
+    <div class="sqlnote" data-sql="diag"></div>
+
+    <div class="sect" id="oeesect">OEE · Line Impact</div>
+    <div class="losslegend">
+      <span><i class="sw productive"></i>Productive</span><span><i class="sw avail"></i>Availability loss</span>
+      <span><i class="sw perf"></i>Performance loss</span><span><i class="sw qual"></i>Quality loss</span>
+    </div>
+    <div id="oee" class="oeegrid"></div>
+    <div class="sqlnote" data-sql="oee"></div>
+
+    <div class="sect" id="labsect">What-if Lab · Re-score with the live UDF</div>
+    <div class="card lab">
+      <div class="presets" id="presets"></div>
+      <div class="labbody">
+        <div class="sliders" id="sliders"></div>
+        <div class="labresult">
+          <div class="k">24 h failure risk</div>
+          <div class="labbig mono" id="labrisk">—</div>
+          <div class="labbar"><i id="labbase"></i><b id="labnow"></b></div>
+          <div class="labdelta" id="labdelta"></div>
+        </div>
+      </div>
+      <div class="foot mono">Changes the latest reading only. Scored by OEE.FAILURE_RISK, the XGBoost model compiled into a Python UDF inside Exasol.</div>
+      <div class="sqlnote" data-sql="lab"></div>
+    </div>
+
+    <div class="sect" id="histsect">Repair History Library</div>
+    <div class="card">
+      <div class="presets" id="histbtns"></div>
+      <div id="history"><span class="muted">Pick a failure mode to see every repair of that kind, with the technician's notes.</span></div>
+      <div class="sqlnote" data-sql="hist"></div>
+    </div>
+
+    <div class="sect" id="pipesect">Fault Pipeline</div>
+    <div class="card" id="pipes"></div>
+
+    <div class="sect" id="alertsect">Active Alerts</div>
+    <div class="ticker" id="ticker"></div>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -24,8 +24,18 @@
 | scikit-learn | BSD-3-Clause | Evaluation metrics |
 | pandas | BSD-3-Clause | Data generation and offline feature reference |
 | NumPy | BSD-3-Clause | Numerics |
+| FastAPI | MIT | Console web backend |
+| Uvicorn | BSD-3-Clause | ASGI server for the console |
 | pytest | MIT | Test suite |
+| httpx | BSD-3-Clause | Test client for the console API |
+| DuckDB | MIT | Tests only: runs the project's SQL as an offline stand-in for Exasol |
+
+## Fonts
+
+| Font | Licence | Role |
+|---|---|---|
+| Barlow, Barlow Semi Condensed (Google Fonts) | SIL Open Font License 1.1 | Console typography; the page falls back to system fonts when offline |
 
 ## APIs
 
-No external APIs are called. The project runs fully offline once Exasol Personal is installed.
+No external APIs are called. The only network request besides Exasol is the console's font stylesheet from Google Fonts, which is optional.

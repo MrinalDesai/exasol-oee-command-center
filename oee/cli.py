@@ -6,6 +6,7 @@
     python -m oee.cli deploy        # compile model -> PYTHON3 UDF, score all readings in-database
     python -m oee.cli status        # plant OEE, riskiest machines, spare-parts exposure
     python -m oee.cli all           # everything above, in order
+    python -m oee.cli serve         # web console at http://127.0.0.1:8000
 """
 from __future__ import annotations
 
@@ -111,6 +112,13 @@ def cmd_status(args):
             print(conn.export_to_pandas(q).to_string(index=False))
 
 
+def cmd_serve(args):
+    from oee.app import serve
+
+    print(f"OEE Command Center on http://{args.host}:{args.port}  (Ctrl+C to stop)")
+    serve(host=args.host, port=args.port)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -122,6 +130,9 @@ def main():
     t.add_argument("--offline", action="store_true", help="train from CSVs instead of Exasol")
     sub.add_parser("deploy")
     sub.add_parser("status")
+    sv = sub.add_parser("serve")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8000)
     a = sub.add_parser("all")
     a.add_argument("--days", type=int, default=60)
     a.add_argument("--seed", type=int, default=42)
@@ -134,7 +145,7 @@ def main():
             step(args)
     else:
         {"generate": cmd_generate, "setup": cmd_setup, "train": cmd_train,
-         "deploy": cmd_deploy, "status": cmd_status}[args.cmd](args)
+         "deploy": cmd_deploy, "status": cmd_status, "serve": cmd_serve}[args.cmd](args)
 
 
 if __name__ == "__main__":
