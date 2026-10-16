@@ -1,81 +1,100 @@
 # OEE Command Center on Exasol Personal
 
-Predictive maintenance and OEE analytics for a multi-plant machine fleet, where
-**the analytics and the model both run inside Exasol**: OEE, MTBF and MTTR are
-SQL views, features are computed with window functions, and a gradient-boosted
-failure-risk model is compiled into a dependency-free Python UDF that scores
-every reading in-database.
+A multi-plant maintenance and supply console where **Exasol does the work**:
+it combines sensor data scattered across five systems, names the root cause
+of a coming failure from the pattern across those streams, finds the spare
+parts wherever they sit in the network, predicts bad shifts before they
+start, and turns three inconsistent supplier catalogs into one order.
 
-Built for ExaThon India 2026, Track 03: Factories, Fleets & Supply Chains.
+Two machine-learning models run **inside Exasol as Python UDFs**. Every
+console panel shows the exact SQL it ran and how long it took.
 
-## Problem
+Built for ExaThon India 2026, **Track 03: Factories, Fleets & Supply Chains**.
 
-**Who has it:** maintenance and production managers running mixed fleets of
-CNC mills, lathes, presses and packing machines across several plants.
+## The problem, in the track's own words
 
-**The problem:** unplanned downtime arrives with no warning and no clear root
-cause. Sensor telemetry, downtime logs, production counts and spare-parts stock
-sit in separate systems, so nobody can answer three questions in one place:
+A plant group with 24 machines (CNC mills, lathes, presses, packers) across Pune,
+Bengaluru and Chennai, and a regional parts warehouse in Hyderabad.
 
-1. Where is OEE being lost: availability, performance or quality?
-2. Which machines are likely to fail in the next 24 hours?
-3. Are the spare parts those failures will need actually at the right plant?
+| Track 03 challenge | What it looks like here | What Exasol does | Where |
+|---|---|---|---|
+| **1. Operational data that is delayed, distributed, incomplete** | Every machine's sensors sit in five systems: condition monitoring (vibration), PLC historian (temperatures), drive controller (speed, torque), energy meters (power, delivered hours late), MES (tool wear). Each system has its own machine IDs, clock, units and gaps | Maps the IDs, converts local time to UTC and °C to K, spreads 15-minute energy readings over their minutes, ignores meter data that has not arrived yet, fills short gaps (each value flagged measured, filled or missing), giving one minute-by-minute table | `sql/02_fusion.sql` |
+| **2. Unplanned downtime with no clear root cause** | Five failure modes. No single sensor names the fault (overstrain and a drive fault both raise power) | One detector per stream per machine-hour, matched against fault signatures learned from past failures: **the pattern combination names the root cause** | `sql/06_root_cause.sql` |
+| **3. Spare parts held in the wrong location** | The plant next to a failing machine often lacks the kit | Looks up the repair kit for the root cause, scans every store, compares road transfer with supplier lead time, reserves the kit when a work order is raised | `sql/09_sourcing.sql` |
+| **4. Quality issues caught at the end of the line** | End-of-line inspection finds scrap after the shift made it | `OEE.QUALITY_RISK`, a model UDF, scores the **next** shift from the machine's condition now | `sql/10_quality.sql` |
+| **5. Suppliers reporting in inconsistent formats** | A CSV in rupees and days, JSON in dollars and weeks, a CSV with "Rs. 1,234.50" and "3 wks". Nobody uses our part numbers | Reads all three, normalises descriptions, matches manufacturer codes, sends near-misses (typos, a 6204 bearing next to our 6205) to review, and builds the **BOM to order** | `sql/11_suppliers.sql` |
 
-**Why it matters:** an unplanned stop costs hours of lost output, and a stop
-that also waits on a part from another site costs days. Knowing risk 24 hours
-ahead turns a breakdown into a planned intervention.
+## Results
 
-**Outcome:** one Exasol schema that answers all three questions, with every
-number traceable to SQL.
+Measured on Exasol Personal (local, Windows), on held-out data only (after each
+model's training cutoff), default dataset (`all`, seed 42, 60 days). Deploy steps
+05–11 run in under 5 seconds in total. These are synthetic plant data: they show
+the method works end to end, not real plant performance.
 
-## How it uses Exasol
+| Step | Result | Compared with |
+|---|---|---|
+| 1. Combine & complete | 99.2% of the minute grid filled, from 4.5 M raw source rows. The same model alarms on **9% of hours with 72% precision**, and warned before 32 of 36 stops | raw sources joined at their reported timestamps: alarms on 97% of hours, 12% precision |
+| 2. Root cause | **86%** of held-out failures named correctly (97% in the top two), on average **17 h** before the stop | guessing the commonest mode: 44% |
+| 3. Parts sourcing | For the 9 machines at risk, parts wait drops from **2,136 h to 104 h** in total | plant store first, then supplier |
+| 4. Quality ahead | **48%** of *new* quality problems flagged before the shift starts; 81% of all bad shifts flagged, 62% precision | inspection rule "last shift was bad": 0% of new problems, 66% of all bad shifts, 66% precision |
+| 5. Supplier BOM | 58 catalog lines from 3 formats: **21 of 21 automatic matches correct**, 91% recall; 4 near matches sent to review (1 real) | |
 
-| Capability | Where |
-|---|---|
-| Parallel bulk load via pyexasol HTTP import | `oee/load.py` |
-| OEE (A×P×Q), MTBF, MTTR, inherent availability, downtime Pareto as SQL views, with correct weighting (components are summed, never ratios averaged) | `sql/02_oee_views.sql` |
-| Feature engineering in-database with analytic window functions (`AVG … ROWS BETWEEN`, `LAG`) | `sql/03_features.sql` |
-| Training labels in-database (unplanned stop within 24 h, correlated `EXISTS` + `ADD_HOURS`) | `sql/03_features.sql` |
-| Model inference as a **PYTHON3 SCALAR UDF** on the stock script container | `oee/compile_udf.py` → `OEE.FAILURE_RISK` |
-| Decision views joining risk × historical failure-mode mix × stock on hand | `sql/04_scoring.sql` (`V_PARTS_EXPOSURE`) |
-| Model registry table | `OEE.MODEL_REGISTRY` |
-| Live what-if scoring: the console calls `OEE.FAILURE_RISK` with edited inputs on every slider move | `oee/app.py` (`/api/whatif`) |
-| Every console panel shows the exact SQL it ran on Exasol and how long it took | `oee/static/app.js` |
+The 24-hour failure model (XGBoost, 200 trees) has test ROC AUC 0.84. The
+quality model has test ROC AUC 0.94.
 
-### Why the model is compiled into the UDF
+## How it uses Exasol (the five pillars)
 
-XGBoost is trained outside the database, then its trees are flattened into
-compact arrays and embedded with a ~50-line pure-Python scorer into a single
-`CREATE PYTHON3 SCALAR SCRIPT` statement. That means:
+| Pillar | How this project uses it | Evidence |
+|---|---|---|
+| **In-memory MPP** | The fleet-scale bench scores ~14 M one-minute readings with a numpy `SET` UDF that Exasol runs as parallel instances across all CPU cores | `python -m oee.cli bench` → `OEE.BENCH_RUNS` |
+| **Columnar storage & compression** | Raw source tables of mostly-repeating IDs and timestamps | `python -m oee.cli pillars` reads `EXA_ALL_OBJECT_SIZES` |
+| **Self-tuning** | No index, partition or hint anywhere in `sql/`. Exasol builds what the joins need | `pillars` reads `EXA_DBA_INDICES` |
+| **High concurrency** | The console is many small queries; `pillars` runs 1, 4, 8 and 16 sessions of the five-step query mix at once | `OEE.PILLAR_EVIDENCE` |
+| **In-database AI / UDFs** | `OEE.FAILURE_RISK`, `OEE.FAILURE_RISK_BATCH` and `OEE.QUALITY_RISK`: XGBoost models compiled into Python UDFs, called from SQL. Root cause, sourcing, supplier matching (`EDIT_DISTANCE`, `JSON_VALUE`, `REGEXP_*`) are SQL | `oee/compile_udf.py`, `sql/05`–`11` |
 
-- no BucketFS upload and no custom script language container to build;
-- it runs on any Exasol Personal deployment with the standard python3 container;
-- scoring happens where the data lives, in parallel UDF instances.
+All five are shown in the console's **Fleet Scale** panel.
 
-`tests/test_udf_parity.py` executes the generated UDF body and checks it against
-`xgboost.predict_proba`: maximum absolute difference is below 1e-6 on the full
-dataset.
+### Why the models are compiled into the UDFs
+
+XGBoost is trained outside the database. Its trees are then flattened into
+arrays and embedded, with a short pure-Python scorer, in a single
+`CREATE PYTHON3 SCALAR SCRIPT` statement:
+
+- there is no BucketFS upload and no custom script container (xgboost is not
+  in the stock container);
+- it runs on any Exasol with the standard python3 container;
+- scoring happens where the data lives.
+
+`tests/test_udf_parity.py` checks the UDF against `xgboost.predict_proba`
+(difference below 1e-5).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    G[oee/generate.py<br/>synthetic fleet] -->|pyexasol import| T[(OEE tables<br/>TELEMETRY, DOWNTIME,<br/>SHIFT_PRODUCTION,<br/>SPARE_PARTS ...)]
-    T --> V1[V_OEE_* / V_RELIABILITY<br/>OEE · MTBF · MTTR]
-    T --> V2[V_FEATURES / V_TRAINING<br/>window-function features]
-    V2 -->|export_to_pandas| TR[oee/train.py<br/>XGBoost]
-    TR --> C[oee/compile_udf.py]
-    C -->|CREATE PYTHON3 SCALAR SCRIPT| U[[OEE.FAILURE_RISK UDF]]
-    V2 --> U
-    U --> R[(RISK_SCORES)]
-    R --> D[V_RISK_LATEST<br/>V_PARTS_EXPOSURE]
-    V1 --> D
+    subgraph Sources["Five sensor systems + MES + stores + 3 supplier catalogs"]
+      S1[SRC_CM_VIBRATION] & S2[SRC_PLC_TEMPS] & S3[SRC_DRIVE] & S4[SRC_ENERGY] & S5[SRC_MES_TOOL]
+      SP[SPARE_PARTS · LOCATIONS · TRANSFER_LANES]
+      SUP[SRC_SUPPLIER_A csv · B json · C csv]
+    end
+    S1 & S2 & S3 & S4 & S5 --> F[02 fusion<br/>TELEMETRY_FUSED → TELEMETRY]
+    F --> FE[04 features<br/>V_FEATURES]
+    FE --> U1[[FAILURE_RISK UDF]] --> R[05 RISK_SCORES]
+    FE --> RC[06 root cause<br/>STREAM_PATTERNS → FAULT_SIGNATURES → ROOT_CAUSE]
+    RC --> D[07 diagnosis<br/>V_MACHINE_STATUS]
+    R --> D
+    D --> SRC[09 sourcing<br/>kit × every store × lanes]
+    SP --> SRC
+    FE --> U2[[QUALITY_RISK UDF]] --> Q[10 quality<br/>next-shift HOLD/CHECK]
+    SUP --> M[11 suppliers<br/>offers → matches → BOM]
+    SRC --> M
+    D & SRC & Q & M --> UI[FastAPI console<br/>every panel shows its SQL]
 ```
 
 ## Quick start
 
-Requirements: Python 3.10+, and Exasol Personal (local on macOS / Linux / Windows,
-or on AWS / Azure).
+Requirements: Python 3.10+, and Exasol Personal (local on macOS, Linux or
+Windows, or on AWS or Azure).
 
 ```bash
 # 1. Exasol Personal (local)
@@ -85,112 +104,100 @@ exasol slc install python3                     # local installs ship without UDF
 exasol info                                    # shows the DSN to connect to
 
 # 2. This project
-git clone <this repo> && cd exasol-oee-command-center
-python -m venv .venv && source .venv/bin/activate
+git clone https://github.com/MrinalDesai/exasol-oee-command-center && cd exasol-oee-command-center
+python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env                           # set EXA_DSN from `exasol info`
 
-# 3. Run the whole pipeline
+# 3. Run the whole pipeline (about 2 minutes)
 python -m oee.cli all
-```
-
-Then open the console:
-
-```bash
-python -m oee.cli serve        # http://127.0.0.1:8000
+python -m oee.cli pillars                      # optional: pillar evidence for the console
+python -m oee.cli serve                        # http://127.0.0.1:8000
 ```
 
 `all` runs these steps, which can also be run one at a time:
 
 | Command | What it does |
 |---|---|
-| `python -m oee.cli generate` | Writes the synthetic dataset to `data/generated/` |
-| `python -m oee.cli setup` | Creates the schema, loads the data, creates OEE / reliability / feature views |
-| `python -m oee.cli train` | Pulls `OEE.V_TRAINING` from Exasol, trains XGBoost, writes `models/` |
-| `python -m oee.cli deploy` | Compiles the model into `OEE.FAILURE_RISK`, scores every reading, builds decision views |
-| `python -m oee.cli status` | Prints plant OEE, highest-risk machines and spare parts at risk |
-| `python -m oee.cli serve` | Starts the web console |
+| `python -m oee.cli preflight` | Checks this Exasol supports every SQL feature the project uses, and that no name clashes with a reserved word |
+| `python -m oee.cli generate` | Writes the synthetic plant, sources and supplier catalogs to `data/generated/` |
+| `python -m oee.cli setup` | Creates the schema, loads every source as delivered, combines and completes the sensor data, creates OEE and feature views |
+| `python -m oee.cli train` | Pulls `V_TRAINING` and `V_QUALITY_TRAINING` from Exasol, trains both models |
+| `python -m oee.cli deploy` | Compiles both models into UDFs, then runs steps 05–11 (scoring, root cause, diagnosis, fusion impact, sourcing, quality, suppliers) |
+| `python -m oee.cli status` | Prints plant OEE, highest-risk machines and parts at risk |
+
+Other commands: `bench` (fleet scale, below), `pillars`, `serve`.
+
+## Fleet scale
+
+```bash
+python -m oee.cli bench --machines 20 --days 30  # quick check first
+python -m oee.cli bench                          # 100 machines x 100 days, one reading a minute
+```
+
+`bench` generates about **14 million one-minute sensor readings (~1 GB of CSV)**
+and times each stage inside Exasol: load (`IMPORT`), sensor fusion (rolling
+windows), pattern detection (`OEE.FAILURE_RISK_BATCH`, a numpy `SET` UDF run in
+parallel per machine-day), alerts and validation. Timings go to
+`OEE.BENCH_RUNS` and the console. Local Exasol Personal runs on one node, so the
+parallelism here is across CPU cores; the same SQL runs unchanged on a cluster.
 
 ## The console
 
-A dark control-room console served by FastAPI, reading Exasol through `pyexasol`.
+A dark control-room console (FastAPI + hand-written HTML/JS), reading Exasol
+through `pyexasol`:
 
-- **Top bar**: database status, the timestamp of the latest data, and how many
-  readings the UDF has scored in Exasol.
-- **Sensor feed**: hourly history for the selected machine (vibration, tool
-  wear, temperature gap, torque, risk). Readings the model scored at 50% or
-  more are drawn red and boxed, stops are shaded, and the dashed line is the
-  normal for that machine type. The strip underneath shows all 60 days; click
-  it to move the 7-day window.
-- **Plant floor**: every machine on every line, coloured by its current
-  24-hour risk (healthy under 10%, watch 10–50%, critical 50%+).
-- **Diagnosis**: the model's risk, the likely failure mode (the machine type's
-  failure history re-weighted by which signals are abnormal now), the signals
-  furthest from normal, a written finding with a recommended action, similar
-  past repairs from technician notes, and stock of the needed parts at that
-  plant. **Raise work order** writes a row to `OEE.WORK_ORDERS` in Exasol.
-- **OEE line impact**: each line's A × P × Q and loss split, and what tomorrow's
-  OEE looks like if the at-risk machines stop unplanned.
-- **What-if lab**: change tool wear, vibration, temperature gap or torque on
-  the latest reading (or use a preset like "Replace tool now") and the live
-  UDF re-scores it.
-- **Repair history library** and **fault pipeline** (detect, diagnose, parts,
-  work order), plus an **active alerts** ticker.
-- Every panel shows **⛁ show SQL**: the exact queries it ran on Exasol and
-  their run time.
-
-The demo dataset has two planted problems for the console to surface: Chennai
-line 2 runs slow (a performance loss), and press CHN-PRESS-03's scrap rate
-climbs over the period (a quality loss).
+- **Sensor feed** for the selected machine, with risk-flagged readings boxed in red and stops shaded.
+- **① Combine & complete**: the five source systems as delivered, how much of each stream was measured or filled, and the same model on raw-joined vs combined data.
+- **② Root cause**: five stream lights for the machine, its pattern next to every learned fault signature, root-cause probabilities, and held-out accuracy.
+- **③ Parts sourcing**: every source for every part of the kit (local, transfer, supplier), the fastest one ticked, and quick links to machines whose kit is elsewhere. Raising a work order reserves the kit in `OEE.PART_RESERVATIONS`.
+- **④ Quality ahead**: HOLD / CHECK / RUN for each machine's next shift, and the model vs the inspection rule.
+- **⑤ Supplier BOM**: the order list, and how each supplier wrote each part (exact match or review).
+- **Fleet scale and the five pillars**, plant floor, diagnosis with technician notes, OEE line impact, a what-if lab that re-scores through the live UDF, repair history, fault pipeline, alerts.
+- Every panel shows **⛁ show SQL**: the queries it ran on Exasol and their run time.
 
 ## Data
 
-All data is synthetic, generated by `oee/generate.py` (seeded, reproducible):
-24 machines across Pune, Bengaluru and Chennai, 60 days of hourly telemetry
-(~34k readings), planned and unplanned stops with technician notes, per-shift
-production counts, and spare-parts stock per plant. Failure behaviour follows
-five competing modes (tool wear, heat dissipation, power, overstrain, bearing
-vibration). See [THIRD_PARTY.md](THIRD_PARTY.md) for data provenance and licences.
+All data is synthetic, generated by `oee/generate.py`, `oee/sources.py` and
+`oee/suppliers.py` (seeded and reproducible). No real or proprietary data is used.
 
-## Model
+- **Plant**: 24 machines, 60 days. Failures develop along a P-F curve: a fault
+  starts, degrades for 18–48 hours and leaves its own footprint on the streams
+  (coolant fault → cooling gap collapses, drive fault → power drifts, overload →
+  torque and power climb, bearing defect → vibration ramps). Tool wear fails on
+  accumulated wear. Scrap follows machine condition. There are two planted OEE
+  problems: Chennai line 2 runs slow, and CHN-PRESS-03's scrap climbs over time.
+- **Sources**: the true minute-by-minute physics is split across five systems with
+  different IDs, clocks (UTC vs IST), units (°C vs K, kWh per 15 min), cadences,
+  dropouts, outages and late delivery. The truth is never loaded; Exasol rebuilds it.
+- **Parts**: repair kits per failure mode, and stock spread unevenly across three
+  plant stores and a warehouse, with road transfer times.
+- **Suppliers**: three catalogs with the same parts written differently, plus
+  near-miss items, a typo, an item with no usable code, and unrelated stock.
+  `SUPPLIER_MATCH_AUDIT` holds the true mapping, used only for scoring the matching.
 
-Binary classifier: *will this machine have an unplanned stop in the next 24 hours?*
-Time-based split (last 20% of the period held out). On the default seed:
-
-| Metric | Value |
-|---|---|
-| Test ROC AUC | 0.81 |
-| Test average precision | 0.49 |
-| Precision in top 5% of risk | 0.67 (base rate 0.086, ~8× lift) |
-| Brier score | 0.058 |
-| Mean predicted risk vs actual failure rate | 0.081 vs 0.086 |
-
-The model is trained without class re-weighting so its scores stay
-calibrated: the console shows risk as a probability, and readings scored
-above 50% are followed by an unplanned stop about 69% of the time.
-
-These figures are on synthetic data and show the pipeline works end to end;
-they are not a claim about real plant performance.
+Data provenance and licences: [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Repository layout
 
 ```
 oee/
-  generate.py      synthetic data generator
-  features.py      feature contract (FEATURES) + pandas reference implementation
-  train.py         XGBoost training and evaluation
-  scorer.py        pure-Python tree scorer (embedded into the UDF)
-  compile_udf.py   booster -> CREATE PYTHON3 SCALAR SCRIPT
-  load.py          CSV -> Exasol via pyexasol
-  sqlrun.py        SQL file runner (handles UDF '/' terminators)
-  db.py            connection settings
-  cli.py           pipeline commands
-  app.py           FastAPI console backend
-  assess.py        per-machine verdicts: status, likely mode, parts, pipeline stage
-  static/          console front end (HTML, CSS, JS; charts are hand-drawn SVG)
+  generate.py   plant physics (machines, P-F faults, stops, shifts, stock)
+  sources.py    splits the sensor truth into five source systems
+  suppliers.py  part master and three supplier catalogs
+  load.py       CSV -> Exasol IMPORT via pyexasol
+  features.py   feature contract;  quality.py  next-shift model contract
+  train.py      XGBoost training;  compile_udf.py / scorer.py / vscorer.py  model -> UDF
+  pipeline.py   ordered deploy steps (shared by the CLI and the tests)
+  preflight.py  Exasol feature and reserved-word checks
+  pillars.py    compression, self-tuning, concurrency evidence
+  scale.py      fleet-scale benchmark
+  app.py, assess.py, static/   console
 sql/
-  01_schema.sql  02_oee_views.sql  03_features.sql  04_scoring.sql
-tests/             pytest suite (data, features, SQL contract, UDF parity, console API)
+  01_schema  02_fusion  03_oee_views  04_features  04_quality_features
+  05_scoring  06_root_cause  07_diagnosis  08_fusion_impact
+  09_sourcing  10_quality  11_suppliers
+tests/          pytest suite
 ```
 
 ## Tests
@@ -199,13 +206,14 @@ tests/             pytest suite (data, features, SQL contract, UDF parity, conso
 pytest -q
 ```
 
-The suite runs offline (no database needed): generator determinism and
-integrity, OEE component bounds, label correctness, SQL ↔ Python feature
-contract, the SQL statement splitter, UDF ↔ XGBoost parity, and the console
-API. The API tests run the project's own SQL files on DuckDB as a stand-in
-(`tests/fakedb.py`), which also checks the view logic: for example, that the
-three losses and productive time add up exactly to planned time. The
-application itself always runs on Exasol.
+84 tests, offline. They run the project's own SQL files on DuckDB as a stand-in
+for Exasol (`tests/fakedb.py`, which translates the few dialect differences).
+They check: fusion against the hidden truth; root-cause signatures and
+held-out accuracy; that sourcing never offers stock that isn't there and that
+reservations round-trip; that the quality UDF matches the trained model; that
+unit conversions and supplier matching are right; UDF ↔ XGBoost parity; and
+the console API. The application itself always runs on Exasol, and
+`preflight` checks the Exasol-specific functions there.
 
 ## Licence
 

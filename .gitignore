@@ -7,3 +7,4 @@ data/generated/
 build/
 models/*.json
 !models/.gitkeep
+data/scale/

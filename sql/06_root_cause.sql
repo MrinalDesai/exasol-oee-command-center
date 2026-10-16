@@ -1,0 +1,175 @@
+-- Step 2: ROOT CAUSE from per-stream patterns (runs after the model deploy:
+-- signatures and priors only use failures before the model's training cutoff).
+--
+-- 1. Five detectors, one per sensor stream, run over every machine-hour:
+--    each stream is compared with its machine type's normal and a pattern fires
+--    when it moves the bad way by 1.5 standard deviations or more.
+-- 2. Fault signatures are learned from history: what the five streams looked
+--    like in the 12 hours before past failures of each type (training period only).
+-- 3. The root cause is the signature the current combination of streams is
+--    closest to, weighted by how often that machine type fails that way.
+--    ROOT_CAUSE_EVAL scores this on held-out failures.
+OPEN SCHEMA OEE;
+
+-- Each stream's normal, per machine type
+CREATE OR REPLACE TABLE STREAM_NORMALS AS
+SELECT MACHINE_TYPE,
+       AVG(VIB_AVG_6H)       AS VIB_MU,    STDDEV(VIB_AVG_6H)       AS VIB_SD,
+       AVG(TEMP_DIFF_AVG_6H) AS TEMP_MU,   STDDEV(TEMP_DIFF_AVG_6H) AS TEMP_SD,
+       AVG(TORQUE_RATIO)     AS TORQUE_MU, STDDEV(TORQUE_RATIO)     AS TORQUE_SD,
+       AVG(POWER_AVG_6H)     AS POWER_MU,  STDDEV(POWER_AVG_6H)     AS POWER_SD,
+       AVG(TOOL_WEAR_MIN)    AS TOOL_MU,   STDDEV(TOOL_WEAR_MIN)    AS TOOL_SD
+FROM V_FEATURES
+GROUP BY MACHINE_TYPE;
+
+-- The five detectors. BAD_Z is the deviation in the direction that harms the
+-- machine: vibration up, cooling gap down, torque up, power off-band either way,
+-- tool wear up.
+CREATE OR REPLACE TABLE STREAM_PATTERNS AS
+WITH z AS (
+    SELECT f.MACHINE_ID, f.MACHINE_TYPE, f.READING_TS,
+           (f.VIB_AVG_6H       - n.VIB_MU)    / NULLIF(n.VIB_SD, 0)    AS Z_VIB,
+           (f.TEMP_DIFF_AVG_6H - n.TEMP_MU)   / NULLIF(n.TEMP_SD, 0)   AS Z_TEMP,
+           (f.TORQUE_RATIO     - n.TORQUE_MU) / NULLIF(n.TORQUE_SD, 0) AS Z_TORQUE,
+           (f.POWER_AVG_6H     - n.POWER_MU)  / NULLIF(n.POWER_SD, 0)  AS Z_POWER,
+           (f.TOOL_WEAR_MIN    - n.TOOL_MU)   / NULLIF(n.TOOL_SD, 0)   AS Z_TOOL
+    FROM V_FEATURES f
+    JOIN STREAM_NORMALS n ON n.MACHINE_TYPE = f.MACHINE_TYPE
+)
+SELECT MACHINE_ID, MACHINE_TYPE, READING_TS, 1 AS STREAM_ORDER, 'VIBRATION' AS STREAM,
+       'vibration rising' AS PATTERN, COALESCE(Z_VIB, 0) AS BAD_Z FROM z
+UNION ALL
+SELECT MACHINE_ID, MACHINE_TYPE, READING_TS, 2, 'TEMPERATURE', 'cooling gap collapsing', -COALESCE(Z_TEMP, 0) FROM z
+UNION ALL
+SELECT MACHINE_ID, MACHINE_TYPE, READING_TS, 3, 'TORQUE', 'torque above nominal', COALESCE(Z_TORQUE, 0) FROM z
+UNION ALL
+SELECT MACHINE_ID, MACHINE_TYPE, READING_TS, 4, 'POWER', 'power out of band', ABS(COALESCE(Z_POWER, 0)) FROM z
+UNION ALL
+SELECT MACHINE_ID, MACHINE_TYPE, READING_TS, 5, 'TOOL', 'tool worn', COALESCE(Z_TOOL, 0) FROM z;
+
+-- Fault signatures, learned from failures before the model's training cutoff
+CREATE OR REPLACE TABLE FAULT_SIGNATURES AS
+WITH cutoff AS (SELECT MAX(TRAIN_CUTOFF) AS TS FROM MODEL_REGISTRY WHERE MODEL_NAME = 'FAILURE_RISK'),
+before_failure AS (
+    SELECT d.FAILURE_MODE, d.STOP_ID, p.STREAM, p.STREAM_ORDER, p.BAD_Z
+    FROM DOWNTIME d
+    CROSS JOIN cutoff c
+    JOIN STREAM_PATTERNS p
+      ON  p.MACHINE_ID = d.MACHINE_ID
+      AND p.READING_TS < d.START_TS
+      AND HOURS_BETWEEN(d.START_TS, p.READING_TS) <= 12
+    WHERE d.STOP_TYPE = 'UNPLANNED' AND d.START_TS <= c.TS
+)
+SELECT FAILURE_MODE, STREAM, STREAM_ORDER,
+       AVG(BAD_Z)               AS SIGNATURE_Z,
+       COUNT(DISTINCT STOP_ID)  AS LEARNED_FROM_STOPS
+FROM before_failure
+GROUP BY FAILURE_MODE, STREAM, STREAM_ORDER;
+
+-- How often each machine type failed in each mode before the cutoff (Laplace-smoothed prior)
+CREATE OR REPLACE TABLE MODE_PRIORS AS
+WITH cutoff AS (SELECT MAX(TRAIN_CUTOFF) AS TS FROM MODEL_REGISTRY WHERE MODEL_NAME = 'FAILURE_RISK'),
+modes AS (SELECT DISTINCT FAILURE_MODE FROM FAULT_SIGNATURES),
+types AS (SELECT DISTINCT MACHINE_TYPE FROM MACHINES),
+counts AS (
+    SELECT m.MACHINE_TYPE, d.FAILURE_MODE, COUNT(*) AS STOPS
+    FROM DOWNTIME d
+    JOIN MACHINES m ON m.MACHINE_ID = d.MACHINE_ID
+    CROSS JOIN cutoff c
+    WHERE d.STOP_TYPE = 'UNPLANNED' AND d.START_TS <= c.TS
+    GROUP BY m.MACHINE_TYPE, d.FAILURE_MODE
+)
+SELECT t.MACHINE_TYPE, o.FAILURE_MODE,
+       (COALESCE(c.STOPS, 0) + 1.0)
+         / (SUM(COALESCE(c.STOPS, 0)) OVER (PARTITION BY t.MACHINE_TYPE) + COUNT(*) OVER (PARTITION BY t.MACHINE_TYPE)) AS PRIOR_SHARE
+FROM types t
+CROSS JOIN modes o
+LEFT JOIN counts c ON c.MACHINE_TYPE = t.MACHINE_TYPE AND c.FAILURE_MODE = o.FAILURE_MODE;
+
+-- Distance from every machine-hour to every signature. Root cause = the mode with
+-- the best fit: prior x exp(-distance^2 / 2), normalised per machine-hour.
+CREATE OR REPLACE TABLE ROOT_CAUSE AS
+WITH dist AS (
+    SELECT p.MACHINE_ID, p.MACHINE_TYPE, p.READING_TS, s.FAILURE_MODE,
+           SUM((p.BAD_Z - s.SIGNATURE_Z) * (p.BAD_Z - s.SIGNATURE_Z)) AS D2,
+           SUM(CASE WHEN p.BAD_Z >= 1.5 THEN 1 ELSE 0 END)              AS ACTIVE_STREAMS
+    FROM STREAM_PATTERNS p
+    JOIN FAULT_SIGNATURES s ON s.STREAM = p.STREAM
+    GROUP BY p.MACHINE_ID, p.MACHINE_TYPE, p.READING_TS, s.FAILURE_MODE
+),
+fit AS (
+    SELECT d.*, pr.PRIOR_SHARE,
+           LN(pr.PRIOR_SHARE) - 0.5 * d.D2 AS LOG_SCORE
+    FROM dist d
+    JOIN MODE_PRIORS pr ON pr.MACHINE_TYPE = d.MACHINE_TYPE AND pr.FAILURE_MODE = d.FAILURE_MODE
+),
+scored AS (
+    SELECT f.*,
+           EXP(LOG_SCORE - MAX(LOG_SCORE) OVER (PARTITION BY MACHINE_ID, READING_TS)) AS REL_SCORE,
+           ROW_NUMBER() OVER (PARTITION BY MACHINE_ID, READING_TS ORDER BY LOG_SCORE DESC) AS CAUSE_RANK
+    FROM fit f
+)
+SELECT MACHINE_ID, READING_TS, FAILURE_MODE, D2, PRIOR_SHARE,
+       REL_SCORE / SUM(REL_SCORE) OVER (PARTITION BY MACHINE_ID, READING_TS) AS CONFIDENCE,
+       CAUSE_RANK, ACTIVE_STREAMS
+FROM scored;
+
+-- Latest reading per machine: which streams fire, and the likely cause
+CREATE OR REPLACE VIEW V_STREAM_PATTERNS_LATEST AS
+SELECT p.MACHINE_ID, p.STREAM, p.STREAM_ORDER, p.PATTERN, p.BAD_Z,
+       CASE WHEN p.BAD_Z >= 1.5 THEN 1 ELSE 0 END AS ACTIVE
+FROM STREAM_PATTERNS p
+JOIN (SELECT MACHINE_ID, MAX(READING_TS) AS TS FROM STREAM_PATTERNS GROUP BY MACHINE_ID) l
+  ON l.MACHINE_ID = p.MACHINE_ID AND l.TS = p.READING_TS;
+
+CREATE OR REPLACE VIEW V_ROOT_CAUSE_LATEST AS
+SELECT r.MACHINE_ID, r.READING_TS, r.FAILURE_MODE, r.D2, r.PRIOR_SHARE, r.CONFIDENCE, r.CAUSE_RANK, r.ACTIVE_STREAMS
+FROM ROOT_CAUSE r
+JOIN (SELECT MACHINE_ID, MAX(READING_TS) AS TS FROM ROOT_CAUSE GROUP BY MACHINE_ID) l
+  ON l.MACHINE_ID = r.MACHINE_ID AND l.TS = r.READING_TS;
+
+-- How well this names the cause of failures it never learned from
+CREATE OR REPLACE TABLE ROOT_CAUSE_EVAL AS
+WITH cutoff AS (SELECT MAX(TRAIN_CUTOFF) AS TS FROM MODEL_REGISTRY WHERE MODEL_NAME = 'FAILURE_RISK'),
+held_out AS (
+    SELECT d.STOP_ID, d.MACHINE_ID, d.START_TS, d.FAILURE_MODE AS TRUE_MODE
+    FROM DOWNTIME d CROSS JOIN cutoff c
+    WHERE d.STOP_TYPE = 'UNPLANNED' AND HOURS_BETWEEN(d.START_TS, c.TS) > 24
+),
+window_rows AS (
+    SELECT h.STOP_ID, h.START_TS, h.TRUE_MODE, r.READING_TS, r.FAILURE_MODE, r.CAUSE_RANK, r.ACTIVE_STREAMS,
+           HOURS_BETWEEN(h.START_TS, r.READING_TS) AS HOURS_BEFORE
+    FROM held_out h
+    JOIN ROOT_CAUSE r
+      ON  r.MACHINE_ID = h.MACHINE_ID
+      AND r.READING_TS < h.START_TS
+      AND HOURS_BETWEEN(h.START_TS, r.READING_TS) <= 24
+),
+last_reading AS (
+    SELECT STOP_ID, MAX(READING_TS) AS TS FROM window_rows GROUP BY STOP_ID
+),
+per_stop AS (
+    SELECT h.STOP_ID, h.TRUE_MODE,
+           MAX(CASE WHEN w.READING_TS = l.TS AND w.CAUSE_RANK = 1 THEN w.FAILURE_MODE END) AS PREDICTED_MODE,
+           MAX(CASE WHEN w.READING_TS = l.TS AND w.CAUSE_RANK <= 2 AND w.FAILURE_MODE = h.TRUE_MODE THEN 1 ELSE 0 END) AS IN_TOP2,
+           MAX(CASE WHEN w.CAUSE_RANK = 1 AND w.FAILURE_MODE = h.TRUE_MODE AND w.ACTIVE_STREAMS > 0
+                    THEN w.HOURS_BEFORE END) AS FIRST_CORRECT_HOURS_BEFORE
+    FROM held_out h
+    LEFT JOIN window_rows w ON w.STOP_ID = h.STOP_ID
+    LEFT JOIN last_reading l ON l.STOP_ID = h.STOP_ID
+    GROUP BY h.STOP_ID, h.TRUE_MODE
+)
+SELECT STOP_ID, TRUE_MODE, PREDICTED_MODE,
+       CASE WHEN PREDICTED_MODE = TRUE_MODE THEN 1 ELSE 0 END AS CORRECT,
+       IN_TOP2,
+       FIRST_CORRECT_HOURS_BEFORE
+FROM per_stop;
+
+CREATE OR REPLACE VIEW V_ROOT_CAUSE_ACCURACY AS
+SELECT COUNT(*)                                    AS STOPS,
+       SUM(CORRECT)                                AS CORRECT,
+       AVG(CORRECT * 1.0)                          AS ACCURACY,
+       AVG(IN_TOP2 * 1.0)                          AS TOP2_ACCURACY,
+       AVG(FIRST_CORRECT_HOURS_BEFORE)             AS AVG_HOURS_EARLY,
+       (SELECT MAX(N) * 1.0 / SUM(N) FROM (SELECT COUNT(*) AS N FROM ROOT_CAUSE_EVAL GROUP BY TRUE_MODE) x) AS MAJORITY_BASELINE
+FROM ROOT_CAUSE_EVAL;

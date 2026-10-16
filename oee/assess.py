@@ -1,137 +1,91 @@
-"""Fleet assessment: turn Exasol query results into per-machine verdicts.
+"""Shape the Exasol diagnosis views into the JSON the console renders.
 
-For each machine's latest reading this combines:
-  - the 24-hour failure risk scored in-database by the FAILURE_RISK UDF,
-  - how far each signal sits from its machine type's normal (z-scores computed in SQL),
-  - the machine type's history of unplanned failure modes,
-  - spare-parts stock at the machine's plant, and open work orders.
+All of the analysis lives in sql/06_root_cause.sql and sql/07_diagnosis.sql:
+  V_MACHINE_STATUS      one row per machine: health, likely mode, part, stock,
+                        open work order, pipeline stage, expected downtime
+  V_MODE_LIKELIHOOD     root-cause probability of each failure mode per machine
+  V_SIGNAL_DEVIATIONS   each signal vs its machine type's normal, ranked
 
-The likely failure mode is the machine type's historical mode mix, re-weighted
-by the signals that are abnormal right now. It is a transparent rule, not a
-second model, and the console says so.
+This module only groups and renames those rows; it computes nothing.
 """
 from __future__ import annotations
 
-import math
-
 MODES = ["TOOL_WEAR", "HEAT_DISSIPATION", "POWER", "OVERSTRAIN", "BEARING"]
-MODE_PARTS = {
-    "TOOL_WEAR": "TOOL-INSERT-T12",
-    "HEAT_DISSIPATION": "COOLANT-PUMP-CP4",
-    "POWER": "SPINDLE-DRIVE-SD2",
-    "OVERSTRAIN": "GEARBOX-SEAL-GS7",
-    "BEARING": "BEARING-6205",
+
+STATUS_SQL = """
+SELECT MACHINE_ID, PLANT_ID, LINE_ID, MACHINE_TYPE, READING_TS, RISK_24H, MTBF_HOURS, MTTR_HOURS, FAILURES,
+       HEALTH, TOP_MODE, TOP_MODE_P, PART_NO, ON_HAND, LEAD_TIME_DAYS, UNPLANNED_HOURS, PLANNED_HOURS,
+       OPEN_WO_ID, OPEN_WO_MODE, STAGE, EXPECTED_DOWN_HOURS_24H
+FROM OEE.V_MACHINE_STATUS
+{where}
+ORDER BY LINE_ID, MACHINE_ID"""
+
+MODES_SQL = """
+SELECT MACHINE_ID, FAILURE_MODE, PART_NO, PROBABILITY, HISTORY_STOPS, SIGNATURE_DISTANCE, MODE_RANK
+FROM OEE.V_MODE_LIKELIHOOD
+{where}
+ORDER BY MACHINE_ID, MODE_RANK"""
+
+SIGNALS_SQL = """
+SELECT MACHINE_ID, SIGNAL_NAME, SIGNAL_VALUE, BASELINE, Z, DEV_RANK
+FROM OEE.V_SIGNAL_DEVIATIONS
+{where}
+ORDER BY MACHINE_ID, DEV_RANK"""
+
+# Display names only (presentation)
+SIGNAL_LABELS = {
+    "TOOL_WEAR_MIN": ("Tool wear", "min"),
+    "VIBRATION_MM_S": ("Vibration", "mm/s"),
+    "TEMP_DIFF_K": ("Process minus air temperature", "K"),
+    "POWER_KW": ("Power", "kW"),
+    "TORQUE_RATIO": ("Torque vs nominal", "×"),
 }
-# Signal z-score columns returned by FLEET_SQL, with the label shown in the console
-SIGNALS = {
-    "TW_Z": ("TOOL_WEAR_MIN", "TW_BASE", "Tool wear", "min"),
-    "VIB_Z": ("VIBRATION_MM_S", "VIB_BASE", "Vibration", "mm/s"),
-    "TD_Z": ("TEMP_DIFF_K", "TD_BASE", "Process minus air temperature", "K"),
-    "PW_Z": ("POWER_KW", "PW_BASE", "Power", "kW"),
-    "TR_Z": ("TORQUE_RATIO", "TR_BASE", "Torque vs nominal", "×"),
-}
-CRITICAL, WATCH = 0.5, 0.10  # watch: above the fleet's ~9% base failure rate
 
 
-def status_for(risk: float | None) -> str:
-    if risk is None:
-        return "unknown"
-    if risk >= CRITICAL:
-        return "critical"
-    if risk >= WATCH:
-        return "watch"
-    return "healthy"
+def queries(machine: str | None = None) -> list[str]:
+    where = f"WHERE MACHINE_ID = '{machine}'" if machine else ""
+    return [q.format(where=where) for q in (STATUS_SQL, MODES_SQL, SIGNALS_SQL)]
 
 
-def _evidence(row: dict) -> dict[str, float]:
-    """How strongly the current signals point at each failure mode (in z units)."""
-    z = {k: (row.get(k) or 0.0) for k in SIGNALS}
-    return {
-        "TOOL_WEAR": z["TW_Z"],
-        "OVERSTRAIN": (z["TW_Z"] + z["TR_Z"]) / 2.0,
-        "HEAT_DISSIPATION": -z["TD_Z"],          # heat builds when the temperature gap shrinks
-        "POWER": abs(z["PW_Z"]),
-        "BEARING": z["VIB_Z"],
-    }
-
-
-def likely_modes(row: dict, type_mix: dict[str, int]) -> list[dict]:
-    """Historical mode mix for the machine type (Laplace-smoothed), re-weighted by signal evidence."""
-    total = sum(type_mix.get(m, 0) for m in MODES) + len(MODES)
-    ev = _evidence(row)
-    scores = {}
-    for m in MODES:
-        prior = (type_mix.get(m, 0) + 1) / total
-        scores[m] = prior * math.exp(0.8 * max(-2.0, min(3.0, ev[m])))
-    s = sum(scores.values())
-    out = [{"mode": m, "p": scores[m] / s, "history": type_mix.get(m, 0)} for m in MODES]
-    return sorted(out, key=lambda d: d["p"], reverse=True)
-
-
-def top_factors(row: dict, n: int = 3) -> list[dict]:
-    out = []
-    for zcol, (col, base, label, unit) in SIGNALS.items():
-        z = row.get(zcol)
-        if z is None:
-            continue
-        out.append({"signal": col, "label": label, "unit": unit, "value": row.get(col),
-                    "baseline": row.get(base), "z": z})
-    return sorted(out, key=lambda d: abs(d["z"]), reverse=True)[:n]
-
-
-def assess(fleet_rows: list[dict], mode_rows: list[dict], planned_hours: float | None,
-           parts_rows: list[dict], wo_rows: list[dict]) -> list[dict]:
-    mix: dict[str, dict[str, int]] = {}
-    hours_by_type: dict[tuple[str, str], float] = {}
-    hours_fleet: dict[str, list[float]] = {}
+def shape(status_rows: list[dict], mode_rows: list[dict], signal_rows: list[dict]) -> list[dict]:
+    modes: dict[str, list[dict]] = {}
     for r in mode_rows:
-        mix.setdefault(r["MACHINE_TYPE"], {})[r["FAILURE_MODE"]] = int(r["STOPS"])
-        hours_by_type[(r["MACHINE_TYPE"], r["FAILURE_MODE"])] = r["AVG_HOURS"]
-        hours_fleet.setdefault(r["FAILURE_MODE"], []).append(r["AVG_HOURS"])
-    stock = {(p["PLANT_ID"], p["PART_NO"]): p for p in parts_rows}
-    open_wo = {w["MACHINE_ID"]: w for w in wo_rows}
+        modes.setdefault(r["MACHINE_ID"], []).append(
+            {"mode": r["FAILURE_MODE"], "p": r["PROBABILITY"], "history": int(r["HISTORY_STOPS"]),
+             "part_no": r["PART_NO"], "distance": r["SIGNATURE_DISTANCE"]})
+    sigs: dict[str, list[dict]] = {}
+    for r in signal_rows:
+        label, unit = SIGNAL_LABELS.get(r["SIGNAL_NAME"], (r["SIGNAL_NAME"], ""))
+        sigs.setdefault(r["MACHINE_ID"], []).append(
+            {"signal": r["SIGNAL_NAME"], "label": label, "unit": unit, "value": r["SIGNAL_VALUE"],
+             "baseline": r["BASELINE"], "z": r["Z"], "rank": int(r["DEV_RANK"])})
 
     out = []
-    for r in fleet_rows:
-        modes = likely_modes(r, mix.get(r["MACHINE_TYPE"], {}))
-        top = modes[0]["mode"]
-        part_no = MODE_PARTS[top]
-        p = stock.get((r["PLANT_ID"], part_no), {})
-        unplanned_h = hours_by_type.get((r["MACHINE_TYPE"], top))
-        if unplanned_h is None and hours_fleet.get(top):
-            unplanned_h = sum(hours_fleet[top]) / len(hours_fleet[top])
-        avoided = None
-        if unplanned_h is not None and planned_hours is not None:
-            avoided = max(unplanned_h - planned_hours, 0.0)
-        wo = open_wo.get(r["MACHINE_ID"])
-        on_hand = p.get("ON_HAND")
-        stage = "DIAGNOSE"
-        if wo:
-            stage = "WORK_ORDER"
-        elif on_hand is not None and on_hand <= 0:
-            stage = "PARTS_BLOCKED"
-        elif r.get("RISK_24H") is not None and r["RISK_24H"] >= WATCH:
-            stage = "READY"
+    for r in status_rows:
+        mid = r["MACHINE_ID"]
+        s = sorted(sigs.get(mid, []), key=lambda d: d["rank"])
+        wo = None
+        if r.get("OPEN_WO_ID") is not None:
+            wo = {"WO_ID": r["OPEN_WO_ID"], "FAILURE_MODE": r["OPEN_WO_MODE"]}
         out.append({
-            "machine_id": r["MACHINE_ID"],
+            "machine_id": mid,
             "plant_id": r["PLANT_ID"],
             "line_id": r["LINE_ID"],
             "machine_type": r["MACHINE_TYPE"],
             "reading_ts": r["READING_TS"],
             "risk": r["RISK_24H"],
-            "status": status_for(r["RISK_24H"]),
+            "status": r["HEALTH"],
             "mtbf_h": r.get("MTBF_HOURS"),
             "mttr_h": r.get("MTTR_HOURS"),
             "failures": r.get("FAILURES"),
-            "likely_modes": modes,
-            "top_factors": top_factors(r),
-            "signals": {col: {"value": r.get(col), "baseline": r.get(base), "z": r.get(zc)}
-                        for zc, (col, base, _label, _unit) in SIGNALS.items()},
-            "part": {"part_no": part_no, "on_hand": on_hand, "lead_time_days": p.get("LEAD_TIME_DAYS")},
-            "unplanned_hours": unplanned_h,
-            "planned_hours": planned_hours,
-            "avoided_hours": avoided,
+            "likely_modes": modes.get(mid, []),
+            "top_factors": s[:3],
+            "signals": {d["signal"]: {"value": d["value"], "baseline": d["baseline"], "z": d["z"]} for d in s},
+            "part": {"part_no": r["PART_NO"], "on_hand": r["ON_HAND"], "lead_time_days": r["LEAD_TIME_DAYS"]},
+            "unplanned_hours": r["UNPLANNED_HOURS"],
+            "planned_hours": r["PLANNED_HOURS"],
+            "expected_down_hours": r["EXPECTED_DOWN_HOURS_24H"],
             "work_order": wo,
-            "stage": stage,
+            "stage": r["STAGE"],
         })
     return out

@@ -9,14 +9,14 @@ SQL = Path(__file__).resolve().parents[1] / "sql"
 
 
 def test_feature_view_defines_every_model_feature():
-    text = (SQL / "03_features.sql").read_text().upper()
+    text = (SQL / "04_features.sql").read_text().upper()
     for f in FEATURES:
         assert re.search(rf"\b{f}\b", text), f"{f} missing from V_FEATURES"
     assert LABEL in text
 
 
 def test_scoring_sql_uses_feature_placeholder():
-    text = (SQL / "04_scoring.sql").read_text()
+    text = (SQL / "05_scoring.sql").read_text()
     assert "FAILURE_RISK({FEATURE_COLUMNS})" in text
 
 

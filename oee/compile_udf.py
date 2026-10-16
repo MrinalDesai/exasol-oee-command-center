@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import xgboost as xgb
 
-from oee import scorer
+from oee import scorer, vscorer
 from oee.features import FEATURES
 
 UDF_NAME = "OEE.FAILURE_RISK"
@@ -45,7 +45,9 @@ def _flatten_tree(tree: dict, feat_index: dict[str, int]) -> dict:
     return {"f": f, "t": t, "y": y, "n": no, "m": m, "v": v}
 
 
-def booster_to_spec(booster: xgb.Booster, calibration_X: np.ndarray | None = None) -> dict:
+def booster_to_spec(booster: xgb.Booster, calibration_X: np.ndarray | None = None,
+                    features: list[str] | None = None) -> dict:
+    FEATURES = features or globals()["FEATURES"]   # noqa: N806  (default: the failure model)
     feat_index = {name: i for i, name in enumerate(FEATURES)}
     trees = [_flatten_tree(json.loads(d), feat_index) for d in booster.get_dump(dump_format="json")]
     spec = {"features": FEATURES, "base_margin": 0.0, "trees": trees}
@@ -92,6 +94,75 @@ def _arg(ctx, i):
 
 def run(ctx):
     return predict_proba(_MODEL, [_arg(ctx, i) for i in range(_N)])
+/
+"""
+
+
+BATCH_UDF_NAME = "FAILURE_RISK_BATCH"
+
+
+def render_batch_udf(spec: dict, name: str = "OEE." + BATCH_UDF_NAME, batch_rows: int = 20000,
+                     timing: bool = False) -> str:
+    """A SET script that scores readings in numpy batches. Each reading is scored
+    independently, so the caller can group the rows however it likes; Exasol runs
+    the groups in parallel across CPU cores, and each instance loads the model once
+    and reuses it for every group it is given."""
+    params = ",\n    ".join(f"{f} DOUBLE" for f in spec["features"])
+    model_json = json.dumps(spec, separators=(",", ":"))
+    body = inspect.getsource(vscorer)
+    if timing:
+        # Diagnostic variant: same work, but emits where each instance spent its time
+        emits = "EMITS (MACHINE_ID VARCHAR(32), N_ROWS DECIMAL(12,0), T_MODULE DOUBLE, T_LOAD DOUBLE, T_START DOUBLE, T_FETCH DOUBLE, T_SCORE DOUBLE, T_EMIT DOUBLE, T_END DOUBLE, VM_PID DECIMAL(12,0))"
+        run = """
+def run(ctx):
+    import time
+    t_start = time.time()
+    fetch = score = emit = 0.0
+    n = 0
+    mid = None
+    while True:
+        a = time.time()
+        df = ctx.get_dataframe(num_rows=_BATCH)
+        fetch += time.time() - a
+        if df is None or len(df) == 0:
+            break
+        mid = df.iloc[0, 0]
+        a = time.time()
+        risk = vproba(_MODEL, df.iloc[:, 2:].to_numpy(dtype="float32", na_value=float("nan")))
+        score += time.time() - a
+        a = time.time()
+        out = _pd.DataFrame({"MACHINE_ID": df.iloc[:, 0], "READING_TS": df.iloc[:, 1], "RISK_24H": risk})
+        emit += time.time() - a
+        n += len(df)
+    import os
+    ctx.emit(mid, n, _T0, _T_LOAD, t_start, fetch, score, emit, time.time(), os.getpid())
+"""
+    else:
+        emits = "EMITS (MACHINE_ID VARCHAR(32), READING_TS TIMESTAMP, RISK_24H DOUBLE)"
+        run = """
+def run(ctx):
+    while True:
+        df = ctx.get_dataframe(num_rows=_BATCH)
+        if df is None or len(df) == 0:
+            break
+        risk = vproba(_MODEL, df.iloc[:, 2:].to_numpy(dtype="float32", na_value=float("nan")))
+        ctx.emit(_pd.DataFrame({"MACHINE_ID": df.iloc[:, 0], "READING_TS": df.iloc[:, 1], "RISK_24H": risk}))
+"""
+    return f"""CREATE OR REPLACE PYTHON3 SET SCRIPT {name}(
+    MACHINE_ID VARCHAR(32),
+    READING_TS TIMESTAMP,
+    {params}
+) {emits} AS
+import time as _time
+_T0 = _time.time()
+{body}
+import json as _json
+import pandas as _pd
+
+_MODEL = vload(_json.loads(r'''{model_json}'''))
+_BATCH = {int(batch_rows)}
+_T_LOAD = _time.time() - _T0
+{run}
 /
 """
 

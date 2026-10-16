@@ -6,12 +6,20 @@ Produces a reproducible fleet of machines across several plants with:
   - DOWNTIME        unplanned stops (failures) and planned maintenance stops
   - SHIFT_PRODUCTION  per-shift output counts for OEE
   - MAINT_NOTES     free-text technician notes attached to each stop
-  - SPARE_PARTS     on-hand stock of parts by site
+  - SPARE_PARTS     on-hand stock of parts by store (plants + a warehouse)
+  - LOCATIONS, TRANSFER_LANES, REPAIR_KITS  parts network and what each repair consumes
 
-Failure physics loosely follow the failure modes described for the public
+Failure physics: the failure modes follow those described for the public
 AI4I 2020 predictive-maintenance dataset (tool wear, heat dissipation,
-power, overstrain), plus a bearing-vibration mode. No real or proprietary
-data is used.
+power, overstrain), plus a bearing-vibration mode. Tool wear fails on
+accumulated wear. The other four develop along a P-F curve: a fault starts
+at random, degrades over 18-48 hours and leaves its own footprint on the
+sensor streams before the machine stops:
+  HEAT_DISSIPATION  coolant fails, the process-air temperature gap collapses
+  POWER             drive fault, power draw drifts out of band and swings
+  OVERSTRAIN        feed jam / overload, torque climbs above nominal
+  BEARING           bearing defect, vibration ramps up
+No real or proprietary data is used.
 
 Usage:
     python -m oee.generate --out data/generated --days 60 --seed 42
@@ -122,18 +130,28 @@ def _make_machines(rng: np.random.Generator, per_plant: int) -> list[Machine]:
     return machines
 
 
-def _hazard(tool_wear, temp_diff, power_kw, strain, vib_excess, frailty):
-    """Per-hour failure hazard for each mode (vectorised over nothing; scalars)."""
-    return {
-        "TOOL_WEAR": 0.0004 * np.exp(max(tool_wear - 180, 0) / 25.0),
-        "HEAT_DISSIPATION": 0.0003 * np.exp(max(9.0 - temp_diff, 0) / 1.2),
-        "POWER": 0.0002 * np.exp(abs(power_kw - 6.5) / 2.2),
-        "OVERSTRAIN": 0.0002 * np.exp(max(strain - 10500, 0) / 900.0),
-        "BEARING": 0.0002 * np.exp(max(vib_excess, 0) / 0.9),
-    }, frailty
+# P-F degradation: (start rate per machine-hour, min hours, max hours)
+DEGRADATION = {
+    "HEAT_DISSIPATION": (0.0011, 18, 40),
+    "POWER": (0.0008, 18, 40),
+    "OVERSTRAIN": (0.0010, 18, 36),
+    "BEARING": (0.0010, 24, 48),
+}
+RANDOM_HAZARD = 0.00004   # failures with no warning at all (any mode), per hour
 
 
-def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2026-07-01"):
+def _wear_hazard(tool_wear: float) -> float:
+    """Per-hour hazard of a tool-wear failure."""
+    return 0.0006 * np.exp(max(tool_wear - 170, 0) / 22.0)
+
+
+def _fault_hazard(progress: float) -> float:
+    """Per-hour hazard of a developing fault failing; progress runs 0 -> 1 over the P-F interval."""
+    return 0.002 * np.exp(5.5 * progress)
+
+
+def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2026-07-01",
+             with_production: bool = True):
     rng = np.random.default_rng(seed)
     machines = _make_machines(rng, per_plant)
     hours = pd.date_range(start=start, periods=days * 24, freq="h")
@@ -145,6 +163,7 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
         tool_wear = float(rng.uniform(0, 120))
         vib_base = 1.8 if m.machine_type in ("CNC_MILL", "CNC_LATHE") else 2.4
         vib_drift = 0.0
+        fault = None              # (mode, started, P-F hours, direction) of a developing fault
         down_until = None
         next_pm = hours[0] + pd.Timedelta(days=int(rng.integers(5, 15)))
 
@@ -172,28 +191,46 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
                     )
                 )
                 tool_wear, vib_drift = 0.0, 0.0
+                if fault is not None and rng.random() < 0.6:
+                    fault = None          # planned maintenance finds most developing faults
                 down_until = ts + pd.Timedelta(hours=int(np.ceil(dur)))
                 next_pm = ts + pd.Timedelta(days=int(rng.integers(10, 18)))
                 continue
 
+            # Start a developing fault (at most one at a time)
+            if fault is None:
+                for fmode, (rate, lo, hi) in DEGRADATION.items():
+                    if rng.random() < rate * m.frailty:
+                        fault = (fmode, ts, float(rng.uniform(lo, hi)), float(rng.choice([-1.0, 1.0])))
+                        break
+            progress = 0.0
+            if fault is not None:
+                progress = (ts - fault[1]).total_seconds() / 3600.0 / fault[2]
+            fmode = fault[0] if fault is not None else None
+
             # Sensor model
             air_temp = 298.0 + 2.0 * np.sin(2 * np.pi * (ts.dayofyear / 365.0)) + 1.5 * np.sin(
                 2 * np.pi * ts.hour / 24.0) + rng.normal(0, 0.5)
-            coolant_eff = 1.0 - 0.15 * (tool_wear / 250.0) + rng.normal(0, 0.08)
+            coolant_eff = 1.0 - 0.05 * (tool_wear / 250.0) + rng.normal(0, 0.05)
+            if fmode == "HEAT_DISSIPATION":
+                coolant_eff -= 0.45 * progress
             process_temp = air_temp + 10.0 * coolant_eff + rng.normal(0, 0.4)
             rpm = m.nominal_rpm * (1 + rng.normal(0, 0.06))
-            torque = m.nominal_torque * (1 + rng.normal(0, 0.10)) * (1 + 0.2 * tool_wear / 250.0)
+            torque = m.nominal_torque * (1 + rng.normal(0, 0.08)) * (1 + 0.05 * tool_wear / 250.0)
+            if fmode == "OVERSTRAIN":
+                torque *= 1 + 0.45 * progress
             power_kw = torque * rpm * 2 * np.pi / 60.0 / 1000.0
             if m.machine_type == "PRESS":
                 power_kw *= 1.6
             elif m.machine_type == "PACKER":
                 power_kw *= 4.0
-            vib_drift += max(rng.normal(0.004, 0.01), 0) * m.frailty
+            if fmode == "POWER":
+                power_kw *= 1 + fault[3] * 0.35 * progress + rng.normal(0, 0.12 * progress)
+            vib_drift += max(rng.normal(0.002, 0.005), 0) * m.frailty
             vibration = vib_base + vib_drift + abs(rng.normal(0, 0.15))
-            temp_diff = process_temp - air_temp
-            strain = tool_wear * 40.0 * torque / m.nominal_torque  # normalised to a 40 Nm reference
+            if fmode == "BEARING":
+                vibration += 2.2 * progress ** 1.5
 
-            hz, frailty = _hazard(tool_wear, temp_diff, power_kw, strain, vibration - vib_base - 1.0, m.frailty)
             tel_rows.append(
                 dict(
                     machine_id=m.machine_id, reading_ts=ts, air_temp_k=round(air_temp, 2),
@@ -204,7 +241,11 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
             )
 
             # Failure draw (competing risks)
-            total = sum(hz.values()) * frailty
+            hz = {k: RANDOM_HAZARD / len(FAILURE_MODES) for k in FAILURE_MODES}
+            hz["TOOL_WEAR"] += _wear_hazard(tool_wear)
+            if fmode is not None:
+                hz[fmode] += _fault_hazard(progress) if progress < 1.25 else 1.0
+            total = min(sum(hz.values()), 1.0)
             if rng.random() < total:
                 modes = list(hz)
                 probs = np.array([hz[k] for k in modes]) / sum(hz.values())
@@ -228,6 +269,8 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
                     tool_wear = 0.0
                 if mode == "BEARING":
                     vib_drift = 0.0
+                if mode == fmode or mode != "TOOL_WEAR":
+                    fault = None          # the repair clears the developing fault
                 down_until = ts + pd.Timedelta(hours=int(np.ceil(dur + 0.5)))
                 continue
 
@@ -237,7 +280,7 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
     telemetry = pd.DataFrame(tel_rows)
     downtime = pd.DataFrame(stop_rows)
     notes = pd.DataFrame(note_rows)
-    production = _shift_production(rng, machines, hours, downtime)
+    production = _shift_production(rng, machines, hours, downtime, telemetry) if with_production else pd.DataFrame()
     parts = _spare_parts(rng)
     return dict(
         MACHINES=machines_df,
@@ -246,6 +289,11 @@ def generate(days: int = 60, seed: int = 42, per_plant: int = 8, start: str = "2
         MAINT_NOTES=notes,
         SHIFT_PRODUCTION=production,
         SPARE_PARTS=parts,
+        LOCATIONS=pd.DataFrame(LOCATIONS, columns=["location_id", "name", "kind"]),
+        TRANSFER_LANES=_transfer_lanes(),
+        REPAIR_KITS=pd.DataFrame(
+            [(mode, part, qty) for mode, kit in REPAIR_KITS.items() for part, qty in kit],
+            columns=["failure_mode", "part_no", "qty"]),
     )
 
 
@@ -257,9 +305,26 @@ QUALITY_DRIFT = {"CHN-PRESS-03": (0.025, 0.11)}  # scrap rate from start -> end 
 NIGHT_SHIFT_PENALTY = 0.03               # small performance dip on the 00:00-08:00 shift
 
 
-def _shift_production(rng, machines, hours, downtime: pd.DataFrame) -> pd.DataFrame:
-    """Three 8h shifts/day. Run time = planned time minus downtime overlapping the shift."""
+def _scrap_from_condition(tool_wear: float, vib_excess: float, temp_diff: float) -> float:
+    """Extra scrap rate caused by machine condition during the shift: a worn tool cuts
+    out of tolerance, vibration leaves chatter marks, poor cooling distorts parts."""
+    return (0.05 / (1.0 + np.exp(-(tool_wear - 190.0) / 15.0))
+            + 0.04 * max(vib_excess - 0.6, 0.0)
+            + 0.015 * max(8.0 - temp_diff, 0.0))
+
+
+def _shift_production(rng, machines, hours, downtime: pd.DataFrame, telemetry: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Three 8h shifts/day. Run time = planned time minus downtime overlapping the shift.
+    Scrap depends on the machine's condition during the shift (see _scrap_from_condition)."""
     rows = []
+    cond = {}
+    if telemetry is not None and len(telemetry):
+        t = telemetry.assign(
+            shift_start=telemetry.reading_ts.dt.floor("8h"),
+            temp_diff=telemetry.process_temp_k - telemetry.air_temp_k)
+        g = t.groupby(["machine_id", "shift_start"]).agg(
+            wear=("tool_wear_min", "mean"), vib=("vibration_mm_s", "mean"), td=("temp_diff", "mean"))
+        cond = {k: tuple(v) for k, v in zip(g.index, g.itertuples(index=False))}
     shift_starts = pd.date_range(hours[0], hours[-1], freq="8h")
     n_shifts = len(shift_starts)
     dt_by_m = {k: g for k, g in downtime.groupby("machine_id")} if len(downtime) else {}
@@ -283,6 +348,10 @@ def _shift_production(rng, machines, hours, downtime: pd.DataFrame) -> pd.DataFr
                 scrap_mean = drift[0] + (drift[1] - drift[0]) * k / max(n_shifts - 1, 1)
             else:
                 scrap_mean = 0.025
+            c = cond.get((m.machine_id, s))
+            if c is not None:
+                vib_base = 1.8 if m.machine_type in ("CNC_MILL", "CNC_LATHE") else 2.4
+                scrap_mean += _scrap_from_condition(c[0], c[1] - vib_base, c[2])
             scrap_rate = float(np.clip(rng.normal(scrap_mean, 0.012), 0.0, 0.2))
             good = int(total * (1 - scrap_rate))
             rows.append(
@@ -295,18 +364,106 @@ def _shift_production(rng, machines, hours, downtime: pd.DataFrame) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def _spare_parts(rng) -> pd.DataFrame:
+# Stores that hold spare parts: the three plants and a regional warehouse
+LOCATIONS = [
+    ("PNQ", "Pune plant store", "PLANT"),
+    ("BLR", "Bengaluru plant store", "PLANT"),
+    ("CHN", "Chennai plant store", "PLANT"),
+    ("HYD", "Hyderabad regional warehouse", "WAREHOUSE"),
+]
+# Road transfer time between stores, hours (symmetric)
+LANE_HOURS = {("PNQ", "BLR"): 20, ("BLR", "CHN"): 8, ("PNQ", "CHN"): 28,
+              ("HYD", "PNQ"): 12, ("HYD", "BLR"): 10, ("HYD", "CHN"): 12}
+# What a repair of each failure mode consumes
+REPAIR_KITS = {
+    "TOOL_WEAR": [("TOOL-INSERT-T12", 4)],
+    "HEAT_DISSIPATION": [("COOLANT-PUMP-CP4", 1), ("COOLANT-FILTER-CF1", 1)],
+    "POWER": [("SPINDLE-DRIVE-SD2", 1), ("DRIVE-FUSE-F30", 2)],
+    "OVERSTRAIN": [("GEARBOX-SEAL-GS7", 1), ("GEAR-OIL-GO5", 1)],
+    "BEARING": [("BEARING-6205", 2), ("BEARING-GREASE-BG1", 1)],
+}
+from oee.suppliers import PART_MASTER as _PART_MASTER  # noqa: E402  (list prices live with the part master)
+
+PART_PRICE_INR = {p[0]: p[4] for p in _PART_MASTER}
+# Stocking policy: where each part is held in bulk (its home store)
+HOME_STORE = {
+    "TOOL-INSERT-T12": "BLR",       # tooling hub
+    "COOLANT-PUMP-CP4": "HYD",      # expensive, held centrally
+    "COOLANT-FILTER-CF1": "PNQ",
+    "SPINDLE-DRIVE-SD2": "HYD",
+    "DRIVE-FUSE-F30": "CHN",
+    "GEARBOX-SEAL-GS7": "HYD",
+    "GEAR-OIL-GO5": "PNQ",
+    "BEARING-6205": "CHN",
+    "BEARING-GREASE-BG1": "HYD",
+}
+CONSUMABLES = {"COOLANT-FILTER-CF1", "DRIVE-FUSE-F30", "GEAR-OIL-GO5", "BEARING-GREASE-BG1"}
+
+
+def _transfer_lanes() -> pd.DataFrame:
     rows = []
-    for plant in PLANTS:
-        for part in FAILURE_PARTS.values():
-            rows.append(
-                dict(
-                    plant_id=plant, part_no=part, on_hand=int(rng.integers(0, 8)),
-                    reorder_point=2, lead_time_days=int(rng.integers(2, 21)),
-                    unit_cost_inr=int(rng.integers(800, 95000)),
-                )
-            )
+    for (a, b), h in LANE_HOURS.items():
+        for x, y in ((a, b), (b, a)):
+            rows.append(dict(from_location=x, to_location=y, transfer_hours=h, cost_inr=1500 + 90 * h))
     return pd.DataFrame(rows)
+
+
+def _spare_parts(rng) -> pd.DataFrame:
+    """Stock per store. Each part is held in bulk at its home store (HOME_STORE; the
+    expensive ones at the regional warehouse); other stores hold a few or none. So
+    the store next to a failing machine is usually missing part of the kit even
+    though the network as a whole has it: parts in the wrong location."""
+    rows = []
+    stores = [loc for loc, _, _ in LOCATIONS]
+    parts = sorted({p for kit in REPAIR_KITS.values() for p, _ in kit})
+    for part in parts:
+        consumable = part in CONSUMABLES
+        home = HOME_STORE[part]
+        lead = int(rng.integers(2, 6)) if consumable else int(rng.integers(7, 29))
+        cost = int(round(PART_PRICE_INR[part] * float(rng.uniform(0.95, 1.1))))
+        empty_share = 0.55 if consumable else 0.7
+        for store in stores:
+            if store == home:
+                on_hand = int(rng.integers(5, 13))
+            else:
+                on_hand = 0 if rng.random() < empty_share else int(rng.integers(1, 3))
+            rows.append(dict(plant_id=store, part_no=part, on_hand=on_hand,
+                             reorder_point=2 if store != "HYD" else 4,
+                             lead_time_days=lead, unit_cost_inr=cost))
+    return pd.DataFrame(rows)
+
+
+def generate_plant(days: int = 60, seed: int = 42, per_plant: int = 8) -> dict:
+    """The demo plant as Exasol receives it: production, downtime and parts as before,
+    but sensor data scattered across five source systems (see oee/sources.py).
+
+    TELEMETRY_TRUTH (the clean hourly physics) is returned for tests and is not
+    loaded into Exasol: the database rebuilds telemetry from the sources."""
+    from oee.scale import _upsample
+    from oee.sources import scatter
+
+    tables = generate(days=days, seed=seed, per_plant=per_plant)
+    truth_hourly = tables.pop("TELEMETRY")
+    minute = _upsample(truth_hourly, 1, np.random.default_rng(seed + 100))
+    as_of = minute["reading_ts"].max() + pd.Timedelta(minutes=1)
+    tables.update(scatter(minute, tables["MACHINES"], as_of=as_of, seed=seed + 200))
+    tables["FUSION_CONFIG"] = pd.DataFrame({"DATA_AS_OF": [as_of]})
+    from oee.suppliers import generate_suppliers
+
+    tables.update(generate_suppliers(seed))
+    from oee.stores import split_stores
+
+    tables.update(split_stores(tables.pop("SPARE_PARTS")))   # stock lives in four store systems
+    tables["TELEMETRY_TRUTH"] = truth_hourly
+    return tables
+
+
+def write_tables(tables: dict, out: Path) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    for name, df in tables.items():
+        if name == "TELEMETRY_TRUTH":
+            continue
+        df.to_csv(out / f"{name.lower()}.csv", index=False, date_format="%Y-%m-%d %H:%M:%S", lineterminator="\n")
 
 
 def main():

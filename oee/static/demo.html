@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fault Pattern Search</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/demo.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="logo"><span class="mark" aria-hidden="true"></span><div>OEE COMMAND CENTER<small>FAULT PATTERN SEARCH</small></div></div>
+  <div class="kv"><div class="k">Database</div><div class="v" id="sys">CONNECTING</div></div>
+  <div class="kv"><div class="k">Searching</div><div class="v mono" id="src">—</div></div>
+  <div class="right"><a class="back" href="/">Full console →</a></div>
+</header>
+
+<main class="demo">
+  <section class="card src" id="srcsect">
+    <div class="steplabel small"><span class="no">0</span>The data, as it arrives</div>
+    <p class="muted srclede">One machine, five systems. Each one calls the machine by a different name, keeps its own clock
+      and units, and some data arrives late or not at all.</p>
+    <div id="srcnames" class="names"></div>
+    <div id="srccards" class="srccards"><span class="muted">Loading…</span></div>
+    <div class="srcgo"><button type="button" class="runbtn" id="combine" disabled>Combine</button>
+      <span class="muted" id="combinehint">Exasol lines the five systems up by time, minute by minute, and fills short gaps.</span></div>
+    <div id="fusedbody"></div>
+    <div class="sqlnote" data-sql="src"></div>
+  </section>
+
+  <section class="pick locked" id="picksect">
+    <div class="steplabel"><span class="no">1</span>Pick a fault pattern</div>
+    <div class="faults" id="faults" role="group" aria-label="Fault patterns"></div>
+  </section>
+
+  <section class="row2">
+    <div class="card" id="pattern">
+      <div class="steplabel small"><span class="no">2</span>The pattern across five streams</div>
+      <div id="sigbars" class="muted">Pick a fault above.</div>
+    </div>
+    <div class="card" id="search">
+      <div class="steplabel small"><span class="no">3</span>Search the whole history in Exasol</div>
+      <div id="searchbody" class="muted">Pick a fault above.</div>
+      <div class="sqlnote" data-sql="search"></div>
+    </div>
+  </section>
+
+  <section class="card live">
+    <div class="livehead">
+      <div class="steplabel small"><span class="no">4</span>Live stream <span class="mono" id="livemachine"></span></div>
+      <div class="liveclock mono" id="liveclock"></div>
+      <button type="button" class="qbtn" id="replay" hidden>Replay</button>
+    </div>
+    <div class="banner2" id="selected" hidden></div>
+    <div id="strips"></div>
+    <div class="note" id="livenote"></div>
+    <div class="sqlnote" data-sql="replay"></div>
+  </section>
+
+  <section class="card kit" id="kitsect" hidden>
+    <div class="steplabel small"><span class="no">5</span>Find the repair kit · <span id="kittitle"></span></div>
+    <div class="kitgrid">
+      <div id="kitlocal"></div>
+      <div id="kitnet"></div>
+    </div>
+    <div class="sqlnote" data-sql="kit"></div>
+  </section>
+
+  <section class="card qc" id="qcsect">
+    <div class="steplabel small"><span class="no">6</span>Quality check · before the shift starts</div>
+    <div class="qcstart" id="qcstart">
+      <p class="muted">Today, bad parts are found at the end of the line, after the shift has already made them.
+        Exasol can check every machine before the shift starts.</p>
+      <button type="button" class="runbtn" id="qcrun">Run quality check</button>
+    </div>
+    <div id="qcbody"></div>
+    <div class="sqlnote" data-sql="qc"></div>
+  </section>
+
+  <section class="card ord" id="ordsect">
+    <div class="steplabel small"><span class="no">7</span>Order a part · suppliers write it their own way</div>
+    <p class="muted ordlede">You need to order a part. Three suppliers sell it, but none of them uses our part number,
+      and each sends its price list in a different format.</p>
+    <div class="ordpick">
+      <div class="chips" id="ordparts" role="group" aria-label="Part to order"></div>
+      <button type="button" class="runbtn" id="ordsearch">Search suppliers</button>
+    </div>
+    <div id="ordbody"></div>
+    <div class="sqlnote" data-sql="order"></div>
+  </section>
+</main>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="/static/demo.js"></script>
+</body>
+</html>

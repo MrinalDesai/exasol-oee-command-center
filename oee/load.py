@@ -1,34 +1,52 @@
-"""Load generated CSVs into the OEE schema using pyexasol's parallel HTTP import."""
+"""Load the generated CSVs into the OEE schema with Exasol's IMPORT (streamed by pyexasol).
+
+Sensor data arrives as five raw source tables (SRC_*); Exasol combines them in
+sql/02_fusion.sql. Column order in each CSV matches the table definition in
+sql/01_schema.sql.
+"""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-import pandas as pd
-
-TABLES = {
-    # table: (csv file, timestamp columns)
-    "MACHINES": ("machines.csv", []),
-    "TELEMETRY": ("telemetry.csv", ["reading_ts"]),
-    "DOWNTIME": ("downtime.csv", ["start_ts", "end_ts"]),
-    "MAINT_NOTES": ("maint_notes.csv", []),
-    "SHIFT_PRODUCTION": ("shift_production.csv", ["shift_start", "shift_end"]),
-    "SPARE_PARTS": ("spare_parts.csv", []),
-}
+TABLES = [
+    "MACHINES", "DOWNTIME", "MAINT_NOTES", "SHIFT_PRODUCTION",
+    "SAP_PNQ.MARD", "SAP_BLR.MARD", "TALLY_CHN.STOCK_SUMMARY", "WMS_HYD.INVENTORY",
+    "LOCATIONS", "TRANSFER_LANES", "REPAIR_KITS",
+    "ASSET_REGISTRY", "SRC_CM_VIBRATION", "SRC_PLC_TEMPS", "SRC_DRIVE", "SRC_ENERGY", "SRC_MES_TOOL",
+    "FUSION_CONFIG",
+    "PART_MASTER", "CATEGORY_TERMS", "SUPPLIERS", "FX_RATES",
+    "SRC_SUPPLIER_A", "SRC_SUPPLIER_B", "SRC_SUPPLIER_C", "SUPPLIER_MATCH_AUDIT",
+]
 
 
-def load_all(conn, data_dir: str | Path) -> dict[str, int]:
+def _csv_rows(path: Path) -> int:
+    with open(path, "rb") as fh:
+        return sum(1 for _ in fh) - 1          # minus header
+
+
+def load_all(conn, data_dir: str | Path, log=print) -> dict[str, int]:
+    from oee.db import connect
+
     data_dir = Path(data_dir)
     counts = {}
-    for table, (fname, ts_cols) in TABLES.items():
-        df = pd.read_csv(data_dir / fname, parse_dates=ts_cols)
-        df.columns = [c.upper() for c in df.columns]
-        for c in ts_cols:
-            df[c.upper()] = df[c.upper()].dt.strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute(f"TRUNCATE TABLE OEE.{table}")
-        conn.import_from_pandas(df, ("OEE", table))
-        n = conn.execute(f"SELECT COUNT(*) FROM OEE.{table}").fetchval()
-        if n != len(df):
-            raise RuntimeError(f"{table}: loaded {n} rows, expected {len(df)}")
-        counts[table] = n
-        print(f"  loaded {table:18s} {n:>8,d} rows")
+    with connect(compression=False) as loader:
+        for table in TABLES:
+            schema, name = table.split(".") if "." in table else ("OEE", table)
+            path = data_dir / f"{table.lower()}.csv"
+            expected = _csv_rows(path)
+            for attempt in (1, 2, 3):
+                conn.execute(f"TRUNCATE TABLE {schema}.{name}")
+                t0 = time.perf_counter()
+                try:
+                    loader.import_from_file(str(path), (schema, name), import_params={"skip": 1})
+                    break
+                except Exception:                 # the HTTPS stream can drop at the very end; retry
+                    if attempt == 3:
+                        raise
+            n = conn.execute(f"SELECT COUNT(*) FROM {schema}.{name}").fetchval()
+            if n != expected:
+                raise RuntimeError(f"{table}: loaded {n} rows, expected {expected}")
+            counts[table] = n
+            log(f"  loaded {table:18s} {n:>10,d} rows  {time.perf_counter() - t0:6.1f} s")
     return counts

@@ -39,9 +39,10 @@ def load_training_exasol() -> pd.DataFrame:
     return df
 
 
-def time_split(df: pd.DataFrame, test_frac: float = 0.2):
-    cutoff = df["READING_TS"].quantile(1 - test_frac)
-    return df[df["READING_TS"] < cutoff], df[df["READING_TS"] >= cutoff], cutoff
+def time_split(df: pd.DataFrame, test_frac: float = 0.2, ts_col: str = "READING_TS"):
+    ts = pd.to_datetime(df[ts_col])
+    cutoff = ts.quantile(1 - test_frac)
+    return df[ts < cutoff], df[ts >= cutoff], cutoff
 
 
 def precision_at_k(y_true, scores, frac=0.05):
@@ -50,12 +51,13 @@ def precision_at_k(y_true, scores, frac=0.05):
     return float(np.asarray(y_true)[top].mean())
 
 
-def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42):
-    train_df, test_df, cutoff = time_split(df)
-    X_tr = train_df[FEATURES].astype(float)
-    y_tr = train_df[LABEL].astype(int)
-    X_te = test_df[FEATURES].astype(float)
-    y_te = test_df[LABEL].astype(int)
+def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42,
+          features: list[str] = FEATURES, label: str = LABEL, ts_col: str = "READING_TS"):
+    train_df, test_df, cutoff = time_split(df, ts_col=ts_col)
+    X_tr = train_df[features].astype(float)
+    y_tr = train_df[label].astype(int)
+    X_te = test_df[features].astype(float)
+    y_te = test_df[label].astype(int)
 
     # No class re-weighting: it would inflate every probability (a "47%" that
     # fails 7% of the time). Unweighted training keeps the risk scores
@@ -85,7 +87,7 @@ def train(df: pd.DataFrame, n_estimators=200, max_depth=4, seed=42):
         "test_mean_predicted": float(p.mean()),
         "n_trees": n_estimators,
         "max_depth": max_depth,
-        "features": FEATURES,
+        "features": list(features),
     }
     return model, metrics
 

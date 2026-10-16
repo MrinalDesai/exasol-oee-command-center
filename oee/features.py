@@ -1,7 +1,7 @@
 """Feature definitions shared by training, the UDF compiler and the SQL layer.
 
 FEATURES is the single source of truth for the model's input order. The SQL
-view OEE.V_FEATURES (sql/03_features.sql) computes the same columns in-database;
+view OEE.V_FEATURES (sql/04_features.sql) computes the same columns in-database;
 `build_features` is the pandas reference implementation used for offline
 training and tests.
 """

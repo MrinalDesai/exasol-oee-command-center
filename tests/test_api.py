@@ -3,13 +3,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from oee.app import create_app
-from tests.fakedb import DuckBackend
 
 
 @pytest.fixture(scope="module")
-def client():
-    backend = DuckBackend(days=30, seed=42)
-    return TestClient(create_app(lambda: backend))
+def client(duck):
+    return TestClient(create_app(lambda: duck))
 
 
 def test_index_and_static(client):
@@ -53,9 +51,10 @@ def test_whatif_scores_through_the_udf(client):
     mid = client.get("/api/risk?limit=1").json()["rows"][0]["MACHINE_ID"]
     base = client.post("/api/whatif", json={"machine_id": mid, "overrides": {}}).json()
     fresh = client.post("/api/whatif", json={"machine_id": mid, "overrides": {"TOOL_WEAR_MIN": 0}}).json()
+    worn = client.post("/api/whatif", json={"machine_id": mid, "overrides": {"TOOL_WEAR_MIN": 320}}).json()
     assert "FAILURE_RISK(" in base["sql"]
     assert 0 <= fresh["rows"][0]["RISK_24H"] <= 1
-    assert fresh["rows"][0]["RISK_24H"] <= base["rows"][0]["RISK_24H"]
+    assert worn["rows"][0]["RISK_24H"] >= fresh["rows"][0]["RISK_24H"]
 
 
 def test_whatif_rejects_unknown_features(client):
@@ -103,3 +102,43 @@ def test_work_order_lifecycle(client):
     assert m["stage"] == "WORK_ORDER"
     client.post(f"/api/workorders/{r.json()['wo_id']}/close")
     assert all(w["MACHINE_ID"] != mid for w in client.get("/api/workorders").json()["rows"])
+
+
+def test_story_endpoints(client):
+    f = client.get("/api/fusion").json()
+    assert len(f["health"]["rows"]) == 5 and len(f["impact"]["rows"]) == 2
+    mid = client.get("/api/risk?limit=1").json()["rows"][0]["MACHINE_ID"]
+    rc = client.get(f"/api/rootcause/{mid}").json()
+    assert len(rc["patterns"]["rows"]) == 5 and len(rc["causes"]["rows"]) == 5
+    assert rc["accuracy"]["rows"][0]["STOPS"] > 0
+    assert client.get(f"/api/sourcing?machine={mid}").json()["plan"]["rows"]
+    assert client.get("/api/quality").json()["impact"]["rows"]
+    assert client.get("/api/rootcause/X';--").status_code in (400, 404)
+
+
+@pytest.mark.parametrize("mode", ["BEARING", "HEAT_DISSIPATION", "OVERSTRAIN", "POWER"])
+def test_demo_search_and_replay(client, mode):
+    from oee import patterns
+
+    d = client.get(f"/api/demo/search?mode={mode}").json()
+    s = d["summary"]["rows"][0]
+    assert d["rows_scanned"] > 0 and d["search"]["ms"] >= 0
+    assert 0 < s["EPISODES"] and s["EPISODES_CAME_TRUE"] <= s["EPISODES"] and s["FAILURES_WARNED"] <= s["FAILURES"]
+    assert len(d["signature"]["rows"]) == 5
+    r = client.get(f"/api/demo/replay?mode={mode}").json()
+    if r["stream"] is None:                          # small test plant: no named held-out failure of this kind
+        assert r["pick"]["rows"] == []
+        return
+    rows = r["stream"]["rows"]
+    own = patterns.MODES[mode][1]
+    run = best = 0
+    for x in rows:                                   # the replay must reach the same rule as the search
+        run = run + 1 if x["TOP_MODE"] == mode and (x[own] or 0) >= patterns.ALARM_Z else 0
+        best = max(best, run)
+    assert best >= patterns.MIN_HOURS
+    assert r["kit"]["rows"]
+
+
+def test_demo_rejects_unknown_mode(client):
+    assert client.get("/api/demo/search?mode=X'--").status_code == 400
+    assert client.get("/demo").status_code == 200

@@ -13,7 +13,8 @@ def test_generator_is_deterministic():
 
 
 def test_generator_tables_and_keys(tables):
-    assert set(tables) == {"MACHINES", "TELEMETRY", "DOWNTIME", "MAINT_NOTES", "SHIFT_PRODUCTION", "SPARE_PARTS"}
+    assert set(tables) == {"MACHINES", "TELEMETRY", "DOWNTIME", "MAINT_NOTES", "SHIFT_PRODUCTION", "SPARE_PARTS",
+                           "LOCATIONS", "TRANSFER_LANES", "REPAIR_KITS"}
     machine_ids = set(tables["MACHINES"].machine_id)
     for name in ("TELEMETRY", "DOWNTIME", "SHIFT_PRODUCTION"):
         assert set(tables[name].machine_id) <= machine_ids

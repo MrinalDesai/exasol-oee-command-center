@@ -20,3 +20,11 @@ def tables():
 def training_df(tables):
     feats = build_features(tables["TELEMETRY"], tables["MACHINES"])
     return add_labels(feats, tables["DOWNTIME"])
+
+
+@pytest.fixture(scope="session")
+def duck():
+    """The project's SQL running on DuckDB (see tests/fakedb.py)."""
+    from tests.fakedb import DuckBackend
+
+    return DuckBackend(days=30, seed=42)

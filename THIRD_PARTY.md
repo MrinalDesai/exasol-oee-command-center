@@ -4,7 +4,7 @@
 
 | Source | Licence | How it is used |
 |---|---|---|
-| Synthetic data from `oee/generate.py` | MIT (this repository) | All machines, telemetry, downtime, production counts, maintenance notes and spare-parts stock are generated. No employer, customer or proprietary data is used. |
+| Synthetic data from `oee/generate.py`, `oee/sources.py`, `oee/suppliers.py` | MIT (this repository) | All machines, sensor source systems, downtime, production counts, maintenance notes, spare-parts stock, stores, transfer lanes and supplier catalogs are generated. Supplier and brand names in the catalogs are invented; part codes follow public standards (ISO insert codes such as CNMG 120408, bearing series such as 6205). No employer, customer or proprietary data is used. |
 | AI4I 2020 Predictive Maintenance Dataset (S. Matzka, UCI Machine Learning Repository) | CC BY 4.0 | Not redistributed or loaded. Its published failure-mode descriptions (tool wear, heat dissipation, power, overstrain) informed the generator's failure physics. |
 
 ## Platform
@@ -13,7 +13,7 @@
 |---|---|---|
 | Exasol Personal (database) | Proprietary, free for personal use ([EULA](https://www.exasol.com/terms-and-conditions/#h-exasol-personal-end-user-license-agreement)) | Data platform: storage, SQL analytics, window-function feature engineering, Python UDF execution. |
 | Exasol Launcher (`exasol` CLI) | MIT | Installs and manages the local or cloud deployment. |
-| Exasol python3 script language container | Exasol | Runtime for the `OEE.FAILURE_RISK` UDF (stock container, no custom packages). |
+| Exasol python3 script language container | Exasol | Runtime for the `OEE.FAILURE_RISK`, `OEE.FAILURE_RISK_BATCH` and `OEE.QUALITY_RISK` UDFs (stock container, no custom packages). |
 
 ## Python libraries
 
@@ -34,7 +34,7 @@
 
 | Font | Licence | Role |
 |---|---|---|
-| Barlow, Barlow Semi Condensed (Google Fonts) | SIL Open Font License 1.1 | Console typography; the page falls back to system fonts when offline |
+| Inter, JetBrains Mono (Google Fonts) | SIL Open Font License 1.1 | Console typography; the page falls back to system fonts when offline |
 
 ## APIs
 
