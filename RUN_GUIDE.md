@@ -1,10 +1,24 @@
-# Run guide (Windows)
+<div align="center">
 
-Every command below is for **Windows PowerShell**, in the order we used them on a
-clean laptop. Paste one block at a time. macOS and Linux users: see the Quick start
-in [README.md](README.md).
+<img src="docs/images/logo.svg" alt="OEE Command Center" width="420">
 
-Time needed: about 20 minutes the first time, most of it downloads.
+## Run guide · Windows
+
+**From a clean laptop to the demo page, every command in order**
+
+[![README](https://img.shields.io/badge/README-overview-0B5FFF?style=for-the-badge)](README.md)
+[![Problem statement](https://img.shields.io/badge/Problem_statement-read-0B5FFF?style=for-the-badge)](PROBLEM_STATEMENT.md)
+[![Run guide](https://img.shields.io/badge/Run_guide-Windows-0B5FFF?style=for-the-badge&logo=windows&logoColor=white)](RUN_GUIDE.md)
+
+</div>
+
+---
+
+> [!IMPORTANT]
+> Every command below is for **Windows PowerShell**, in the order used on a clean
+> laptop. Paste **one block at a time**. Time needed: **about 20 minutes** the first
+> time, most of it downloads. macOS and Linux: see the
+> [Quick start](README.md#quick-start).
 
 ## What you need
 
@@ -15,12 +29,13 @@ Time needed: about 20 minutes the first time, most of it downloads.
 | Git | https://git-scm.com/download/win |
 | Exasol Personal launcher (`exasol.exe`) | https://downloads.exasol.com/exasol-personal |
 
-Exasol Personal runs in a container on Windows. If the launcher asks for Podman,
-follow its prompt to install it.
+> [!NOTE]
+> Exasol Personal runs in a container on Windows. If the launcher asks for Podman,
+> follow its prompt to install it.
 
 ---
 
-## Part A · Downloads (once)
+## Part A · Downloads *(once)*
 
 **A1.** Download `exasol.exe` from https://downloads.exasol.com/exasol-personal
 and save it into a new folder `Downloads\exasol`.
@@ -82,7 +97,7 @@ Set `EXA_DSN` to the address from `exasol info`. The defaults (`sys` / `exasol`,
 
 ---
 
-## Part B · Build and run (once, about 2 minutes)
+## Part B · Build and run *(once, about 2 minutes)*
 
 **B1.** Run the offline tests (no database needed). Expect `101 passed`:
 
@@ -119,7 +134,8 @@ you use it; press `Ctrl+C` there to stop.
 
 ## Part C · Every time after a restart
 
-The data stays in Exasol. You only need to start the database and the web app:
+> [!TIP]
+> The data stays in Exasol. You only need to start the database and the web app:
 
 ```powershell
 $env:Path += ";$HOME\Downloads\exasol"

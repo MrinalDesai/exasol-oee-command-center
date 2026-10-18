@@ -1,6 +1,18 @@
-# Problem statement
+<div align="center">
 
-**Track 03 · Factories, Fleets & Supply Chains**
+<img src="docs/images/logo.svg" alt="OEE Command Center" width="420">
+
+## Problem statement
+
+**ExaThon India 2026 · Track 03: Factories, Fleets & Supply Chains**
+
+[![README](https://img.shields.io/badge/README-overview-0B5FFF?style=for-the-badge)](README.md)
+[![Problem statement](https://img.shields.io/badge/Problem_statement-read-0B5FFF?style=for-the-badge)](PROBLEM_STATEMENT.md)
+[![Run guide](https://img.shields.io/badge/Run_guide-Windows-0B5FFF?style=for-the-badge&logo=windows&logoColor=white)](RUN_GUIDE.md)
+
+</div>
+
+---
 
 ## Who has the problem
 
@@ -32,6 +44,11 @@ supplier price lists that arrive as spreadsheets and email.
 
 ## Why it matters
 
+> [!IMPORTANT]
+> **A line that waits for a diagnosis, a part or a re-run is lost output.** These
+> plants cannot afford a data team or a large platform project, so the answer has
+> to run on one database they can install themselves.
+
 Unplanned downtime is the largest loss in OEE (availability × performance ×
 quality). Every hour a line waits for a diagnosis, a part or a re-run is lost
 output, overtime and late deliveries. Scrap made before anyone notices costs the
@@ -52,5 +69,7 @@ the database with SQL and Python UDFs, on one copy of the data:
 | Quality at end of line | Scores every shift before it starts (Go / Check first / Stop) | Warned before 22 of 46 new quality problems; end-of-line inspection warns before none |
 | Supplier formats | Deep scan reads every format, converts units and currency, and judges each match | Builds the order line from catalogs where a plain search finds 0 |
 
-All data in this project is synthetic. See [README.md](README.md) for the demo,
-and [RUN_GUIDE.md](RUN_GUIDE.md) to run it.
+> [!WARNING]
+> All data in this project is synthetic, generated with known ground truth so every
+> result can be checked. See [README.md](README.md) for the demo, and
+> [RUN_GUIDE.md](RUN_GUIDE.md) to run it.

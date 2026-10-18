@@ -1,31 +1,94 @@
-# OEE Command Center on Exasol Personal
+<div align="center">
 
-A multi-plant maintenance and supply console where **Exasol does the work**:
-it combines sensor data scattered across five systems, names the root cause
-of a coming failure from the pattern across those streams, finds the spare
-parts wherever they sit in the network, predicts bad shifts before they
-start, and turns three inconsistent supplier catalogs into one order.
+<img src="docs/images/logo.svg" alt="OEE Command Center" width="480">
 
-Two machine-learning models run **inside Exasol as Python UDFs**. Every
-console panel shows the exact SQL it ran and how long it took.
+### Sensor fusion, root cause, parts, quality and suppliers, all inside Exasol
 
-Built for ExaThon India 2026, **Track 03: Factories, Fleets & Supply Chains**.
+**ExaThon India 2026 · Track 03: Factories, Fleets & Supply Chains**
+Mrinal Prakash Desai · Team size 1
 
-- **Problem statement:** [PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md)
-- **Run it on Windows, step by step:** [RUN_GUIDE.md](RUN_GUIDE.md)
-- **Live demo page:** `python -m oee.cli serve`, then open http://127.0.0.1:8000/demo
+[![Problem statement](https://img.shields.io/badge/Problem_statement-read-0B5FFF?style=for-the-badge)](PROBLEM_STATEMENT.md)
+[![Run guide](https://img.shields.io/badge/Run_guide-Windows-0B5FFF?style=for-the-badge&logo=windows&logoColor=white)](RUN_GUIDE.md)
+[![Demo video](https://img.shields.io/badge/Demo_video-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](#submission)
+[![Pitch deck](https://img.shields.io/badge/Pitch_deck-PDF-F97316?style=for-the-badge)](#submission)
+[![Licence](https://img.shields.io/badge/Licence-MIT-2EA043?style=for-the-badge)](LICENSE)
 
-## The demo, step by step
+![Exasol](https://img.shields.io/badge/Exasol_Personal-local%2C_Windows-1F6FEB)
+![UDFs](https://img.shields.io/badge/ML_in_database-3_Python_UDFs-1F6FEB)
+![Fusion](https://img.shields.io/badge/fusion-4.5_M_rows_%E2%86%92_2.0_M_minutes_in_5.3_s-2EA043)
+![Bench](https://img.shields.io/badge/fleet_bench-~14_M_readings-2EA043)
+![Tests](https://img.shields.io/badge/tests-101%2F101_passing-2EA043)
 
-All screenshots are from Exasol Personal running locally on a Windows laptop.
-Every number on screen is computed by Exasol at the moment the button is pressed;
-each panel's **show SQL** link shows the exact queries and their run time.
+</div>
 
-### 0 · The data, as it arrives, then Combine
+---
+
+A plant group's machine data is split across five systems that disagree on names,
+clocks and units. OEE Command Center hands all of it to Exasol, which **combines**
+it minute by minute, **names the fault** from its pattern across the streams hours
+before the stop, **finds the repair kit** wherever it sits across four store
+systems, **checks quality before the shift** starts, and **reads three supplier
+price lists** in three formats to build the order. Every number on screen comes
+from a query that has just run, and each panel shows that SQL and its run time.
 
 ![Combine](docs/screenshots/01-combine.png)
 
-One machine as five systems see it: five different names for the same machine,
+---
+
+## Submission
+
+| | Item | Where |
+|---|---|---|
+| ✅ | **Problem statement**: who has the problem and why it matters | **[PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md)** |
+| ✅ | **Public code repository** | **[github.com/MrinalDesai/exasol-oee-command-center](https://github.com/MrinalDesai/exasol-oee-command-center)** |
+| ⏳ | **Pitch deck** (PDF) | **added before 25 Oct** |
+| ⏳ | **Demo video**, 3 minutes max | **added before 25 Oct** |
+| ✅ | **README**: overview, setup, usage | **this page**: [overview](#the-five-problems-five-buttons) · [setup](#quick-start) · [usage](#the-demo-step-by-step) |
+| ✅ | **Deployment instructions and run guide** | **[RUN_GUIDE.md](RUN_GUIDE.md)** (Windows, every command in order) · [Quick start](#quick-start) |
+| ✅ | **Licence** | **[MIT](LICENSE)** |
+
+> [!IMPORTANT]
+> **Runs on your own machine in about 20 minutes.** Exasol Personal is free; the
+> data is generated, so no accounts or keys are needed. Follow
+> [RUN_GUIDE.md](RUN_GUIDE.md), then open **http://127.0.0.1:8000/demo**.
+
+---
+
+## The doctrine
+
+> ### Combine first. Let the pattern name the cause. Keep the work where the data is.
+
+| Principle | In practice |
+|---|---|
+| **Combine first** | No model sees raw sources. Exasol maps IDs, clocks and units, and fills short gaps, flagging every value as measured, filled or missing. The same model on raw-joined data alarms on 97% of hours; on the combined data, on 9%. |
+| **The pattern names the cause** | No single stream names a fault (overstrain and a drive fault both raise power). The combination across five streams does, and every pattern is checked against history: how often it came true. |
+| **Keep the work where the data is** | XGBoost models are compiled into Python UDFs and called from SQL. Root cause, stock search and supplier matching are SQL. Nothing leaves the database to be scored. |
+
+---
+
+## The five problems, five buttons
+
+| # | Track 03 problem | Press | What Exasol does |
+|---|---|---|---|
+| **0** | **Operational data that is delayed, distributed, incomplete** | **Combine** | Lines five sensor systems up by time, minute by minute, and fills short gaps |
+| **1–4** | **Unplanned downtime with no clear root cause** | **Bearing · Coolant · Overstrain · Drive** | Shows the fault's five-stream pattern, searches the whole history for it, timed, then replays an unseen machine until the pattern selects the fault |
+| **5** | **Spare parts held in the wrong location** | *(follows the fault)* | Searches the plant store, then all four store systems as one; flags wrong-location stock and the fastest way to site |
+| **6** | **Quality issues caught at the end of the line** | **Run quality check** | Scores every shift with a model UDF before it starts: Go, Check first or Stop |
+| **7** | **Suppliers reporting in inconsistent formats** | **Search suppliers → Deep scan** | Reads a CSV, a JSON file and a messy CSV in their own formats, matches the part and builds the order line |
+
+---
+
+## The demo, step by step
+
+> [!NOTE]
+> All screenshots are from Exasol Personal running locally on a Windows laptop.
+> Nothing is pre-computed for the page: every number is computed by Exasol when the
+> button is pressed, and each panel's **show SQL** link shows the exact queries and
+> their run time.
+
+### 0 · The data, as it arrives, then Combine
+
+*Screenshot at the top of this page.* One machine as five systems see it: five different names for the same machine,
 two clocks (UTC and India time), temperatures in °C, energy in 15-minute blocks
 that arrive hours late, and missing minutes. **Combine** runs the real fusion SQL
 for the whole plant: Exasol lines every system up by time, minute by minute, and
@@ -58,6 +121,10 @@ machine and the lead time).
 ### 5 · Spare parts held in the wrong location
 
 ![Repair kit search](docs/screenshots/drive-3-kit.png)
+
+> [!TIP]
+> **Plant store first, then the network.** This is the "wrong location" problem
+> made visible: the parts exist, just not where the machine is.
 
 The drive repair on BLR-PACKER-08 needs two parts. Exasol first searches the
 plant's own store system (SAP, Bengaluru): **both missing**. It then reads all four
@@ -93,7 +160,14 @@ delivery like "1 wks"), converts them, and judges every line: the same part, a
 different part with a similar name, or a near match that a person must check.
 Then it builds the order line.
 
-## The problem, in the track's own words
+> [!NOTE]
+> Near matches are never ordered automatically. A 6204 bearing listed next to our
+> 6205 looks almost identical as text; the deep scan marks it **ASK** for a person
+> to check, instead of guessing.
+
+---
+
+## The problem, in detail
 
 A plant group with 24 machines (CNC mills, lathes, presses, packers) across Pune,
 Bengaluru and Chennai, and a regional parts warehouse in Hyderabad.
@@ -108,11 +182,14 @@ Bengaluru and Chennai, and a regional parts warehouse in Hyderabad.
 
 ## Results
 
+> [!WARNING]
+> **Synthetic data.** These numbers show the method works end to end on a
+> generated plant with known ground truth. They are not real plant performance.
+
 Measured on Exasol Personal (local, Windows), on held-out data only (after each
 model's training cutoff), default dataset (`all`, seed 42, 60 days). Deploy steps
 05–11 run in about 5 seconds in total; combining the five sensor systems takes
-about 5–11 s depending on the machine. These are synthetic plant data: they show
-the method works end to end, not real plant performance.
+about 5–11 s depending on the machine.
 
 | Step | Result | Compared with |
 |---|---|---|
@@ -137,7 +214,10 @@ quality model has test ROC AUC 0.94.
 
 All five are shown in the console's **Fleet Scale** panel.
 
-### Why the models are compiled into the UDFs
+<details>
+<summary><b>Why the models are compiled into the UDFs</b></summary>
+
+<br>
 
 XGBoost is trained outside the database. Its trees are then flattened into
 arrays and embedded, with a short pure-Python scorer, in a single
@@ -150,6 +230,8 @@ arrays and embedded, with a short pure-Python scorer, in a single
 
 `tests/test_udf_parity.py` checks the UDF against `xgboost.predict_proba`
 (difference below 1e-5).
+
+</details>
 
 ## Architecture
 
@@ -176,9 +258,12 @@ flowchart LR
 
 ## Quick start
 
+> [!TIP]
+> **On Windows, use [RUN_GUIDE.md](RUN_GUIDE.md)**: the same steps as copy-paste
+> PowerShell blocks, with downloads separated from running.
+
 Requirements: Python 3.10+, Git, and Exasol Personal (local on Windows, macOS or
-Linux, or on AWS or Azure). **Windows users: follow [RUN_GUIDE.md](RUN_GUIDE.md)**,
-which has every command, in order.
+Linux, or on AWS or Azure).
 
 ```bash
 # 1. Exasol Personal (local)
@@ -232,6 +317,11 @@ parallelism here is across CPU cores; the same SQL runs unchanged on a cluster.
 
 ## The full console
 
+<details>
+<summary><b>Besides the demo page, a full control-room console</b></summary>
+
+<br>
+
 Besides the demo page, a dark control-room console (FastAPI + hand-written HTML/JS), reading Exasol
 through `pyexasol`:
 
@@ -243,6 +333,8 @@ through `pyexasol`:
 - **⑤ Supplier BOM**: the order list, and how each supplier wrote each part (exact match or review).
 - **Fleet scale and the five pillars**, plant floor, diagnosis with technician notes, OEE line impact, a what-if lab that re-scores through the live UDF, repair history, fault pipeline, alerts.
 - Every panel shows **⛁ show SQL**: the queries it ran on Exasol and their run time.
+
+</details>
 
 ## Data
 
@@ -315,4 +407,14 @@ itself always runs on Exasol, and `preflight` checks the Exasol-specific functio
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Exasol Personal itself is proprietary software,
-free for personal use under its own EULA.
+free for personal use under its own EULA. Data provenance and third-party
+licences: [THIRD_PARTY.md](THIRD_PARTY.md).
+
+---
+
+<div align="center">
+
+**Built solo by Mrinal Prakash Desai**
+ExaThon India 2026 · Track 03: Factories, Fleets & Supply Chains
+
+</div>
