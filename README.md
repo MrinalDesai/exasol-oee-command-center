@@ -11,6 +11,88 @@ console panel shows the exact SQL it ran and how long it took.
 
 Built for ExaThon India 2026, **Track 03: Factories, Fleets & Supply Chains**.
 
+- **Problem statement:** [PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md)
+- **Run it on Windows, step by step:** [RUN_GUIDE.md](RUN_GUIDE.md)
+- **Live demo page:** `python -m oee.cli serve`, then open http://127.0.0.1:8000/demo
+
+## The demo, step by step
+
+All screenshots are from Exasol Personal running locally on a Windows laptop.
+Every number on screen is computed by Exasol at the moment the button is pressed;
+each panel's **show SQL** link shows the exact queries and their run time.
+
+### 0 · The data, as it arrives, then Combine
+
+![Combine](docs/screenshots/01-combine.png)
+
+One machine as five systems see it: five different names for the same machine,
+two clocks (UTC and India time), temperatures in °C, energy in 15-minute blocks
+that arrive hours late, and missing minutes. **Combine** runs the real fusion SQL
+for the whole plant: Exasol lines every system up by time, minute by minute, and
+fills short gaps. **4.5 M rows from 5 systems into 2.0 M aligned minutes in 5.3 s.**
+White values were measured, yellow ↻ values were filled from the reading just before.
+
+### 1–4 · Unplanned downtime with no clear root cause
+
+Each fault leaves its own pattern across the five streams. No single stream
+names the fault; the combination does. Pick a fault and Exasol (2) shows its
+pattern, (3) searches the whole history for it, timed, and checks how often it
+came true, then (4) replays a machine the model never trained on until the same
+pattern selects the fault, hours before the real stop (each screenshot shows the
+machine and the lead time).
+
+| Fault | Pattern | Found in history | Came true (followed by that failure within 48 h) | Failures warned |
+|---|---|---|---|---|
+| **Bearing** | vibration ramps up, the rest stays normal | 41× | 63% (13× chance) | 26 of 35 |
+| **Coolant** | the process–air temperature gap collapses | 44× | 50% (13× chance) | 22 of 26 |
+| **Overstrain** | torque and power climb together | 37× | **100%** (22× chance) | 29 of 31 |
+| **Drive** (motor drive) | power drifts out of band, torque stays normal | 56× | 54% (11× chance) | 27 of 34 |
+
+<table>
+<tr><td><img src="docs/screenshots/bearing-1-search.png" alt="Bearing"></td><td><img src="docs/screenshots/coolant-1-search.png" alt="Coolant"></td></tr>
+<tr><td align="center"><b>Bearing</b></td><td align="center"><b>Coolant</b></td></tr>
+<tr><td><img src="docs/screenshots/overstrain-1-search.png" alt="Overstrain"></td><td><img src="docs/screenshots/drive-1-search.png" alt="Drive"></td></tr>
+<tr><td align="center"><b>Overstrain</b></td><td align="center"><b>Drive</b></td></tr>
+</table>
+
+### 5 · Spare parts held in the wrong location
+
+![Repair kit search](docs/screenshots/drive-3-kit.png)
+
+The drive repair on BLR-PACKER-08 needs two parts. Exasol first searches the
+plant's own store system (SAP, Bengaluru): **both missing**. It then reads all four
+store systems as one (SAP Pune, SAP Bengaluru, Tally Chennai, WMS Hyderabad, each
+with its own layout and its own way of writing part numbers), flags each part as
+**WRONG LOCATION**, and picks the fastest source: **the whole kit on site in 10 h,
+instead of 8 days waiting on the supplier.** Both searches are timed (19 ms, 34 ms).
+
+### 6 · Quality issues caught at the end of the line
+
+![Quality check](docs/screenshots/05-quality-check.png)
+
+Today, bad parts are found at end-of-line inspection, after the shift has made
+them. **Run quality check** scores every shift with `OEE.QUALITY_RISK`, a model
+compiled into an Exasol UDF (4,240 shifts in 0.43 s), and gives each machine's next
+shift **Go, Check first or Stop**. In the example, the old way found 300 bad parts at
+the end of the shift; the check said stop before it started (the machine was
+running hot). On shifts the model never learned from, it warned before **22 of 46
+new quality problems**; the end-of-line check, by definition, before none.
+
+### 7 · Suppliers reporting in inconsistent formats
+
+![Normal search](docs/screenshots/06-normal-search.png)
+
+A normal search for our part number finds **0** lines: none of the three
+suppliers uses it.
+
+![Deep scan](docs/screenshots/07-deep-scan.png)
+
+**Deep scan** reads all three price lists in their own formats (a CSV in rupees and
+days, a JSON file in dollars and weeks, a CSV with prices like "Rs. 1,234.50" and
+delivery like "1 wks"), converts them, and judges every line: the same part, a
+different part with a similar name, or a near match that a person must check.
+Then it builds the order line.
+
 ## The problem, in the track's own words
 
 A plant group with 24 machines (CNC mills, lathes, presses, packers) across Pune,
@@ -28,14 +110,15 @@ Bengaluru and Chennai, and a regional parts warehouse in Hyderabad.
 
 Measured on Exasol Personal (local, Windows), on held-out data only (after each
 model's training cutoff), default dataset (`all`, seed 42, 60 days). Deploy steps
-05–11 run in under 5 seconds in total. These are synthetic plant data: they show
+05–11 run in about 5 seconds in total; combining the five sensor systems takes
+about 5–11 s depending on the machine. These are synthetic plant data: they show
 the method works end to end, not real plant performance.
 
 | Step | Result | Compared with |
 |---|---|---|
 | 1. Combine & complete | 99.2% of the minute grid filled, from 4.5 M raw source rows. The same model alarms on **9% of hours with 72% precision**, and warned before 32 of 36 stops | raw sources joined at their reported timestamps: alarms on 97% of hours, 12% precision |
 | 2. Root cause | **86%** of held-out failures named correctly (97% in the top two), on average **17 h** before the stop | guessing the commonest mode: 44% |
-| 3. Parts sourcing | For the 9 machines at risk, parts wait drops from **2,136 h to 104 h** in total | plant store first, then supplier |
+| 3. Parts sourcing | Example in the demo: drive kit for BLR-PACKER-08, both parts missing at the plant, **on site in 10 h** by transfer from Chennai and Hyderabad | 8 days waiting on the supplier |
 | 4. Quality ahead | **48%** of *new* quality problems flagged before the shift starts; 81% of all bad shifts flagged, 62% precision | inspection rule "last shift was bad": 0% of new problems, 66% of all bad shifts, 66% precision |
 | 5. Supplier BOM | 58 catalog lines from 3 formats: **21 of 21 automatic matches correct**, 91% recall; 4 near matches sent to review (1 real) | |
 
@@ -93,12 +176,14 @@ flowchart LR
 
 ## Quick start
 
-Requirements: Python 3.10+, and Exasol Personal (local on macOS, Linux or
-Windows, or on AWS or Azure).
+Requirements: Python 3.10+, Git, and Exasol Personal (local on Windows, macOS or
+Linux, or on AWS or Azure). **Windows users: follow [RUN_GUIDE.md](RUN_GUIDE.md)**,
+which has every command, in order.
 
 ```bash
 # 1. Exasol Personal (local)
-curl https://www.exasol.com/install/ | sh      # installs the `exasol` launcher
+#    macOS / Linux: curl https://www.exasol.com/install/ | sh
+#    Windows: download the launcher from https://downloads.exasol.com/exasol-personal (see RUN_GUIDE.md)
 exasol install local
 exasol slc install python3                     # local installs ship without UDF runtimes
 exasol info                                    # shows the DSN to connect to
@@ -112,7 +197,7 @@ cp .env.example .env                           # set EXA_DSN from `exasol info`
 # 3. Run the whole pipeline (about 2 minutes)
 python -m oee.cli all
 python -m oee.cli pillars                      # optional: pillar evidence for the console
-python -m oee.cli serve                        # http://127.0.0.1:8000
+python -m oee.cli serve                        # demo: http://127.0.0.1:8000/demo · console: http://127.0.0.1:8000
 ```
 
 `all` runs these steps, which can also be run one at a time:
@@ -128,6 +213,9 @@ python -m oee.cli serve                        # http://127.0.0.1:8000
 
 Other commands: `bench` (fleet scale, below), `pillars`, `serve`.
 
+After `bench`, the pattern search on the demo page (step 3) scans the full
+~14 M one-minute readings instead of the demo plant's ~34 k hourly ones.
+
 ## Fleet scale
 
 ```bash
@@ -142,9 +230,9 @@ parallel per machine-day), alerts and validation. Timings go to
 `OEE.BENCH_RUNS` and the console. Local Exasol Personal runs on one node, so the
 parallelism here is across CPU cores; the same SQL runs unchanged on a cluster.
 
-## The console
+## The full console
 
-A dark control-room console (FastAPI + hand-written HTML/JS), reading Exasol
+Besides the demo page, a dark control-room console (FastAPI + hand-written HTML/JS), reading Exasol
 through `pyexasol`:
 
 - **Sensor feed** for the selected machine, with risk-flagged readings boxed in red and stops shaded.
@@ -170,8 +258,12 @@ All data is synthetic, generated by `oee/generate.py`, `oee/sources.py` and
 - **Sources**: the true minute-by-minute physics is split across five systems with
   different IDs, clocks (UTC vs IST), units (°C vs K, kWh per 15 min), cadences,
   dropouts, outages and late delivery. The truth is never loaded; Exasol rebuilds it.
-- **Parts**: repair kits per failure mode, and stock spread unevenly across three
-  plant stores and a warehouse, with road transfer times.
+- **Parts**: repair kits per failure mode. Stock follows a stocking policy (each part
+  has a home store; expensive parts sit at the regional warehouse) and lives in four
+  separate store systems with their own layouts: `SAP_PNQ.MARD`, `SAP_BLR.MARD`
+  (SAP-style), `TALLY_CHN.STOCK_SUMMARY` (Tally-style) and `WMS_HYD.INVENTORY` (a
+  warehouse system with bin locations). These are synthetic tables named after common
+  system types; no SAP or Tally software or data is used.
 - **Suppliers**: three catalogs with the same parts written differently, plus
   near-miss items, a typo, an item with no usable code, and unrelated stock.
   `SUPPLIER_MATCH_AUDIT` holds the true mapping, used only for scoring the matching.
@@ -192,12 +284,15 @@ oee/
   preflight.py  Exasol feature and reserved-word checks
   pillars.py    compression, self-tuning, concurrency evidence
   scale.py      fleet-scale benchmark
-  app.py, assess.py, static/   console
+  stores.py     the four store systems and their layouts
+  patterns.py   SQL behind the demo page (pattern search, replay, kit search, deep scan)
+  app.py, assess.py, static/   console and demo page (static/demo.*)
 sql/
-  01_schema  02_fusion  03_oee_views  04_features  04_quality_features
+  01_schema  02_fusion  03_oee_views  03_stores  04_features  04_quality_features
   05_scoring  06_root_cause  07_diagnosis  08_fusion_impact
   09_sourcing  10_quality  11_suppliers
 tests/          pytest suite
+docs/screenshots/   the screenshots in this README
 ```
 
 ## Tests
@@ -206,14 +301,16 @@ tests/          pytest suite
 pytest -q
 ```
 
-84 tests, offline. They run the project's own SQL files on DuckDB as a stand-in
+101 tests, offline. They run the project's own SQL files on DuckDB as a stand-in
 for Exasol (`tests/fakedb.py`, which translates the few dialect differences).
 They check: fusion against the hidden truth; root-cause signatures and
 held-out accuracy; that sourcing never offers stock that isn't there and that
 reservations round-trip; that the quality UDF matches the trained model; that
 unit conversions and supplier matching are right; UDF ↔ XGBoost parity; and
-the console API. The application itself always runs on Exasol, and
-`preflight` checks the Exasol-specific functions there.
+the console API. Two tests guard Exasol rules that DuckDB does not enforce: every
+computed column must be named, and no name may be an Exasol reserved word (the list
+in `tests/exasol_reserved.txt` comes from `EXA_SQL_KEYWORDS`). The application
+itself always runs on Exasol, and `preflight` checks the Exasol-specific functions there.
 
 ## Licence
 

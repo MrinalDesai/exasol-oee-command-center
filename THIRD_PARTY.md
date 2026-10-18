@@ -4,7 +4,7 @@
 
 | Source | Licence | How it is used |
 |---|---|---|
-| Synthetic data from `oee/generate.py`, `oee/sources.py`, `oee/suppliers.py` | MIT (this repository) | All machines, sensor source systems, downtime, production counts, maintenance notes, spare-parts stock, stores, transfer lanes and supplier catalogs are generated. Supplier and brand names in the catalogs are invented; part codes follow public standards (ISO insert codes such as CNMG 120408, bearing series such as 6205). No employer, customer or proprietary data is used. |
+| Synthetic data from `oee/generate.py`, `oee/sources.py`, `oee/suppliers.py` | MIT (this repository) | All machines, sensor source systems, downtime, production counts, maintenance notes, spare-parts stock, stores, transfer lanes and supplier catalogs are generated. Supplier and brand names in the catalogs are invented; part codes follow public standards (ISO insert codes such as CNMG 120408, bearing series such as 6205). No employer, customer or proprietary data is used. The four store tables (`SAP_PNQ.MARD`, `SAP_BLR.MARD`, `TALLY_CHN.STOCK_SUMMARY`, `WMS_HYD.INVENTORY`) are synthetic and only imitate the general layout of common system types; the names SAP and Tally are used descriptively. No SAP, Tally or other vendor software, data or interface is used, and the project is not affiliated with them. |
 | AI4I 2020 Predictive Maintenance Dataset (S. Matzka, UCI Machine Learning Repository) | CC BY 4.0 | Not redistributed or loaded. Its published failure-mode descriptions (tool wear, heat dissipation, power, overstrain) informed the generator's failure physics. |
 
 ## Platform
