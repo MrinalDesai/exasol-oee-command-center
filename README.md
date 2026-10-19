@@ -10,7 +10,7 @@ Mrinal Prakash Desai · Team size 1
 [![Problem statement](https://img.shields.io/badge/Problem_statement-read-0B5FFF?style=for-the-badge)](PROBLEM_STATEMENT.md)
 [![Run guide](https://img.shields.io/badge/Run_guide-Windows-0B5FFF?style=for-the-badge&logo=windows&logoColor=white)](RUN_GUIDE.md)
 [![Demo video](https://img.shields.io/badge/Demo_video-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](#submission)
-[![Pitch deck](https://img.shields.io/badge/Pitch_deck-PDF-F97316?style=for-the-badge)](#submission)
+[![Pitch deck](https://img.shields.io/badge/Pitch_deck-PDF-F97316?style=for-the-badge)](docs/pitch-deck.pdf)
 [![Licence](https://img.shields.io/badge/Licence-MIT-2EA043?style=for-the-badge)](LICENSE)
 
 ![Exasol](https://img.shields.io/badge/Exasol_Personal-local%2C_Windows-1F6FEB)
@@ -41,7 +41,7 @@ from a query that has just run, and each panel shows that SQL and its run time.
 |---|---|---|
 | ✅ | **Problem statement**: who has the problem and why it matters | **[PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md)** |
 | ✅ | **Public code repository** | **[github.com/MrinalDesai/exasol-oee-command-center](https://github.com/MrinalDesai/exasol-oee-command-center)** |
-| ⏳ | **Pitch deck** (PDF) | **added before 25 Oct** |
+| ✅ | **Pitch deck** (PDF) | **[docs/pitch-deck.pdf](docs/pitch-deck.pdf)** |
 | ⏳ | **Demo video**, 3 minutes max | **added before 25 Oct** |
 | ✅ | **README**: overview, setup, usage | **this page**: [overview](#the-five-problems-five-buttons) · [setup](#quick-start) · [usage](#the-demo-step-by-step) |
 | ✅ | **Deployment instructions and run guide** | **[RUN_GUIDE.md](RUN_GUIDE.md)** (Windows, every command in order) · [Quick start](#quick-start) |
