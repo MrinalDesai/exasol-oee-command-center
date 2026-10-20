@@ -14,6 +14,14 @@
 
 ---
 
+## The problem in one sentence
+
+> A maintenance manager running three plants can't stop a breakdown before it happens, because the warning signs, the spare parts and the supplier price lists are scattered across systems that each describe the same machine and part differently.
+>
+> **If this worked**, he would know which fault is coming hours before the line stops, with the right part already on its way from wherever it sits.
+
+**Track:** 03 · Factories, Fleets & Supply Chains · **Demo video:** https://youtu.be/EhW4fQo-oj4
+
 ## Who has the problem
 
 Plant and maintenance managers at mid-sized Indian manufacturers: machine shops,

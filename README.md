@@ -9,7 +9,7 @@ Mrinal Prakash Desai · Team size 1
 
 [![Problem statement](https://img.shields.io/badge/Problem_statement-read-0B5FFF?style=for-the-badge)](PROBLEM_STATEMENT.md)
 [![Run guide](https://img.shields.io/badge/Run_guide-Windows-0B5FFF?style=for-the-badge&logo=windows&logoColor=white)](RUN_GUIDE.md)
-[![Demo video](https://img.shields.io/badge/Demo_video-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](#submission)
+[![Demo video](https://img.shields.io/badge/Demo_video-watch-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/EhW4fQo-oj4)
 [![Pitch deck](https://img.shields.io/badge/Pitch_deck-PDF-F97316?style=for-the-badge)](docs/pitch-deck.pdf)
 [![Licence](https://img.shields.io/badge/Licence-MIT-2EA043?style=for-the-badge)](LICENSE)
 
@@ -23,6 +23,8 @@ Mrinal Prakash Desai · Team size 1
 
 ---
 
+> **The problem.** A maintenance manager running three plants can't stop a breakdown before it happens, because the warning signs, the spare parts and the supplier price lists are scattered across systems that each describe the same machine and part differently. **If this worked**, he would know which fault is coming hours before the line stops, with the right part already on its way from wherever it sits.
+
 A plant group's machine data is split across five systems that disagree on names,
 clocks and units. OEE Command Center hands all of it to Exasol, which **combines**
 it minute by minute, **names the fault** from its pattern across the streams hours
@@ -31,7 +33,9 @@ systems, **checks quality before the shift** starts, and **reads three supplier
 price lists** in three formats to build the order. Every number on screen comes
 from a query that has just run, and each panel shows that SQL and its run time.
 
-![Combine](docs/screenshots/01-combine.png)
+[![Watch the 3-minute demo](docs/screenshots/01-combine.png)](https://youtu.be/EhW4fQo-oj4)
+
+<p align="center"><b><a href="https://youtu.be/EhW4fQo-oj4">▶ Watch the 3-minute demo</a></b></p>
 
 ---
 
@@ -42,14 +46,16 @@ from a query that has just run, and each panel shows that SQL and its run time.
 | ✅ | **Problem statement**: who has the problem and why it matters | **[PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md)** |
 | ✅ | **Public code repository** | **[github.com/MrinalDesai/exasol-oee-command-center](https://github.com/MrinalDesai/exasol-oee-command-center)** |
 | ✅ | **Pitch deck** (PDF) | **[docs/pitch-deck.pdf](docs/pitch-deck.pdf)** |
-| ⏳ | **Demo video**, 3 minutes max | **added before 25 Oct** |
+| ✅ | **Demo video**, under 3 minutes | **[youtu.be/EhW4fQo-oj4](https://youtu.be/EhW4fQo-oj4)** |
 | ✅ | **README**: overview, setup, usage | **this page**: [overview](#the-five-problems-five-buttons) · [setup](#quick-start) · [usage](#the-demo-step-by-step) |
 | ✅ | **Deployment instructions and run guide** | **[RUN_GUIDE.md](RUN_GUIDE.md)** (Windows, every command in order) · [Quick start](#quick-start) |
 | ✅ | **Licence** | **[MIT](LICENSE)** |
 
 > [!IMPORTANT]
-> **Runs on your own machine in about 20 minutes.** Exasol Personal is free; the
-> data is generated, so no accounts or keys are needed. Follow
+> **Runs on your own machine in about 30 minutes.** Exasol Personal is free; the
+> data is generated, so no accounts or keys are needed. **All data is synthetic**,
+> generated to mirror a real multi-plant shop floor; no employer or proprietary
+> data is used. Follow
 > [RUN_GUIDE.md](RUN_GUIDE.md), then open **http://127.0.0.1:8000/demo**.
 
 ---
